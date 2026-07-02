@@ -1,0 +1,92 @@
+name: CI
+
+on:
+    push:
+        branches: [main]
+    pull_request:
+    workflow_dispatch:
+
+permissions:
+    contents: read
+
+jobs:
+    extension:
+        name: Extension (check + tests + leak scan)
+        runs-on: ubuntu-latest
+        steps:
+            - name: Checkout
+              uses: actions/checkout@v4
+
+            - name: Setup Bun
+              uses: oven-sh/setup-bun@v2
+              with:
+                  bun-version: latest
+
+            - name: Syntax check
+              run: bun --check extension/headroom.ts
+
+            - name: Compactor + adaptive tests
+              run: bun test tests/
+
+            - name: Leak scan
+              run: bun .scripts/scan-leaks.mjs
+
+    lint:
+        name: Lint (eslint + prettier)
+        runs-on: ubuntu-latest
+        steps:
+            - name: Checkout
+              uses: actions/checkout@v4
+
+            - name: Setup Bun
+              uses: oven-sh/setup-bun@v2
+              with:
+                  bun-version: latest
+
+            - name: Install dev dependencies
+              run: bun install --frozen-lockfile || bun install
+
+            - name: ESLint
+              run: bunx eslint tests .scripts --format stylish
+
+            - name: Prettier check
+              run: bunx prettier --check "tests/**/*.mjs" ".scripts/**/*.mjs" "*.json" "*.mjs"
+
+    python:
+        name: Python plugin (ruff)
+        runs-on: ubuntu-latest
+        steps:
+            - name: Checkout
+              uses: actions/checkout@v4
+
+            - name: Setup Python
+              uses: actions/setup-python@v5
+              with:
+                  python-version: '3.13'
+
+            - name: Ruff
+              run: |
+                  pip install ruff
+                  ruff check plugins
+
+    shell:
+        name: Installer (shellcheck + bash -n)
+        runs-on: ubuntu-latest
+        steps:
+            - name: Checkout
+              uses: actions/checkout@v4
+
+            - name: Syntax
+              run: bash -n install.sh
+
+            - name: ShellCheck
+              run: shellcheck install.sh
+
+            - name: One-line install smoke (no git clone)
+              run: |
+                  tar --exclude='.git' -czf "$RUNNER_TEMP/omp-headroom.tar.gz" .
+                  mkdir -p "$RUNNER_TEMP/pipe-cwd"
+                  cd "$RUNNER_TEMP/pipe-cwd"
+                  OMP_HEADROOM_ARCHIVE_URL="file://$RUNNER_TEMP/omp-headroom.tar.gz" \
+                  OMP_HEADROOM_UV=true \
+                  bash -s -- --dry-run --agent-dir "$RUNNER_TEMP/agent" < "$GITHUB_WORKSPACE/install.sh"

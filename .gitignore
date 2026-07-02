@@ -1,0 +1,32 @@
+# Logs
+logs
+*.log
+npm-debug.log*
+
+# Dependencies
+node_modules/
+
+# Python
+venv/
+__pycache__/
+*.pyc
+*.egg-info/
+.ruff_cache/
+# Build artifacts
+*.zip
+*.tar.gz
+.eslintcache
+
+# OS generated files
+.DS_Store
+Thumbs.db
+*~
+
+# Editors
+.vscode
+.idea
+
+# Backups
+*.backup*
+*.bak
+.backup/

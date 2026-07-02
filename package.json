@@ -1,0 +1,39 @@
+{
+    "author": "DarkPhilosophy",
+    "description": "Headroom context-compression integration for OMP: proxy lifecycle, tool-output compression, session archive compaction with CCR retrieval, adaptive thresholds, and a live savings widget.",
+    "devDependencies": {
+        "@eslint/js": "^9.39.2",
+        "eslint": "^9.39.2",
+        "eslint-config-prettier": "^10.1.8",
+        "globals": "^17.0.0",
+        "prettier": "^3.8.0"
+    },
+    "keywords": [
+        "omp",
+        "headroom",
+        "llm",
+        "context",
+        "compression",
+        "token",
+        "proxy",
+        "rocm",
+        "cuda"
+    ],
+    "license": "GPL-3.0-or-later",
+    "name": "omp-headroom",
+    "repository": {
+        "type": "git",
+        "url": "git+https://github.com/DarkPhilosophy/omp-headroom.git"
+    },
+    "scripts": {
+        "check": "bun --check extension/headroom.ts",
+        "test": "bun test tests/",
+        "lint": "eslint tests .scripts --format stylish",
+        "lint:fix": "eslint --fix tests .scripts --format stylish",
+        "lint:py": "ruff check plugins",
+        "scan": "bun .scripts/scan-leaks.mjs",
+        "sync": "bun .scripts/sync-extension.mjs --diff",
+        "verify": "bun run check && bun run test && bun run scan"
+    },
+    "version": "0.1.0"
+}
