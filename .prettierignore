@@ -1,0 +1,4 @@
+# Mirrored artifact of the installed extension (tabs, mixed style) — formatting
+# it would create permanent drift against the live copy.
+extension/headroom.ts
+LICENSE

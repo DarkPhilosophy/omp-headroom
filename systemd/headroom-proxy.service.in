@@ -1,0 +1,15 @@
+[Unit]
+Description=Headroom token-compression proxy (persistent, shared across OMP sessions)
+After=network.target
+
+[Service]
+ExecStart=@HEADROOM_BIN@ proxy --host 127.0.0.1 --port @PORT@ --no-telemetry
+Environment=HEADROOM_TELEMETRY=off
+Environment=HEADROOM_CODE_AWARE_ENABLED=1
+Environment=HEADROOM_NO_SUBSCRIPTION_TRACKING=1
+Environment=HEADROOM_PROXY_EXTENSIONS=omp_stats
+Restart=always
+RestartSec=3
+
+[Install]
+WantedBy=default.target
