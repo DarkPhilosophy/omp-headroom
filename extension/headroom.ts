@@ -323,17 +323,13 @@ function archiveAttemptLine(state) {
 
 
 const RETRIEVE_DESCRIPTION =
-	"Retrieve original uncompressed content that Headroom compressed to save tokens. Use this when a compression marker/hash indicates more details are available.";
+	"Retrieve full original uncompressed content that Headroom compressed to save tokens. Use this when a compression marker/hash indicates more details are available.";
 const RETRIEVE_SCHEMA = {
 	type: "object",
 	properties: {
 		hash: {
 			type: "string",
 			description: "Hash key from a Headroom compression marker, for example the value after hash=.",
-		},
-		query: {
-			type: "string",
-			description: "Optional search query. When provided, returns only original content chunks matching the query.",
 		},
 	},
 	required: ["hash"],
@@ -1768,11 +1764,11 @@ async function ensureProxy(ctx, state, waitMs = 0) {
 	return false;
 }
 
-async function retrieveViaProxy(hash, query, signal) {
+async function retrieveViaProxy(hash, signal) {
 	const response = await fetch(proxyPath("/v1/retrieve"), {
 		method: "POST",
 		headers: { "Content-Type": "application/json", "X-Client": "omp" },
-		body: JSON.stringify(query ? { hash, query } : { hash }),
+		body: JSON.stringify({ hash }),
 		signal: signal ?? AbortSignal.timeout(TOOL_TIMEOUT_MS),
 	});
 	const text = await response.text();
@@ -2153,13 +2149,12 @@ export default function headroomExtension(pi) {
 		description: RETRIEVE_DESCRIPTION,
 		parameters: z.object({
 			hash: z.string().describe("Hash key from a Headroom compression marker."),
-			query: z.string().optional().describe("Optional search query to filter original content."),
 		}),
 		async execute(_toolCallId, params, signal, _onUpdate, ctx) {
 			await ensureProxy(ctx, state, 5_000);
 			let data;
 			try {
-				data = await retrieveViaProxy(params.hash, params.query, signal);
+				data = await retrieveViaProxy(params.hash, signal);
 			} catch (error) {
 				data = { error: String(error?.message || error), hash: params.hash };
 			}

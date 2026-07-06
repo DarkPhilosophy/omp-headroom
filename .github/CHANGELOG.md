@@ -4,6 +4,7 @@
 
 ### Extension
 - Fixed `headroom_retrieve` local CCR fallback retrieval when the proxy cannot return an archived hash.
+- Matched `headroom_retrieve` to upstream's current hash-only full-content retrieval contract.
 
 ## v0.1.0 — initial public release
 
