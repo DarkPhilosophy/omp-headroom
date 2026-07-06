@@ -1,5 +1,10 @@
 # Changelog
 
+## v0.1.1 — CCR fallback fix
+
+### Extension
+- Fixed `headroom_retrieve` local CCR fallback retrieval when the proxy cannot return an archived hash.
+
 ## v0.1.0 — initial public release
 
 ### Extension

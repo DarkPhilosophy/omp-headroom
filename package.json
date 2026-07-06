@@ -35,5 +35,5 @@
         "sync": "bun .scripts/sync-extension.mjs --diff",
         "verify": "bun run check && bun run test && bun run scan"
     },
-    "version": "0.1.0"
+    "version": "0.1.1"
 }

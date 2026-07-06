@@ -628,9 +628,20 @@ async function doMaintainInstall(ctx, state, force) {
 	}
 }
 
-function ccrFallbackPath(hash) {
+function ccrFallbackPath(hash, dir = CCR_DIR) {
 	const slug = String(hash || "").replace(/[^0-9A-Za-z_-]/g, "");
-	return slug ? join(CCR_DIR, `${slug}.txt`) : "";
+	return slug ? join(dir, `${slug}.txt`) : "";
+}
+
+export async function readCcrFallback(hash, dir = CCR_DIR) {
+	const file = ccrFallbackPath(hash, dir);
+	if (!file) return undefined;
+	try {
+		const original = await readFile(file, "utf8");
+		return original || undefined;
+	} catch {
+		return undefined;
+	}
 }
 
 async function persistCcrOriginal(result, originalText, compressedText, state, ctx) {
