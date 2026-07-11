@@ -97,6 +97,12 @@ jobs:
                   omp plugin install "$RUNNER_TEMP/package/package"
                   omp plugin doctor
 
+            - name: Setup Node with npm registry auth
+              uses: actions/setup-node@v4
+              with:
+                  node-version: 22
+                  registry-url: https://registry.npmjs.org
+
             - name: Publish npm beta
               env:
                   NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}

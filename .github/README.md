@@ -14,7 +14,7 @@
 ```mermaid
 flowchart LR
     OMP[OMP session] -->|before_provider_request| PLUGIN[omp-headroom plugin]
-    PLUGIN -->|/v1/compress| PROXY[Headroom proxy\n127.0.0.1:8787]
+    PLUGIN -->|/v1/compress| PROXY["Headroom proxy<br/>127.0.0.1:8787"]
     PROXY -->|compressed payload| PLUGIN
     PLUGIN --> LLM[LLM provider]
     LLM -->|headroom_retrieve hash| PLUGIN
@@ -153,7 +153,7 @@ sequenceDiagram
     participant C as CCR store
     participant L as LLM provider
     O->>H: before_provider_request(messages)
-    H->>H: select stable prefix; preserve live tail
+    H->>H: select stable prefix, preserve live tail
     H->>C: persist complete prefix atomically
     C-->>H: retrievable hash
     H->>L: smaller archive index + verbatim live tail
