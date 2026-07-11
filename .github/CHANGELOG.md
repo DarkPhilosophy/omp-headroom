@@ -1,5 +1,11 @@
 # Changelog
 
+## Unreleased
+
+### Fixed
+
+- First-time venv provisioning now always runs when the Headroom binary is missing at session start. `OMP_HEADROOM_AUTOUPDATE=0` previously skipped initial installation entirely; it now disables only the daily update poll.
+
 ## 0.1.0-beta.1 — 2026-07-11
 
 ### Added

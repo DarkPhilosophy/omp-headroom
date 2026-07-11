@@ -39,7 +39,7 @@ omp plugin install omp-headroom@beta
 omp plugin doctor
 ```
 
-Start OMP once to provision the local `headroom-ai` virtual environment and proxy. For a persistent proxy shared by OMP sessions:
+Start OMP once — the plugin provisions everything itself: it creates the `headroom-ai` virtual environment at `~/.omp/agent/headroom-venv`, installs `headroom-ai[all]` with the bundled `omp_stats` proxy plugin, re-pins the ROCm Torch build on AMD hardware, and starts the loopback proxy. No manual step is required, and first-time provisioning runs even with `OMP_HEADROOM_AUTOUPDATE=0` — that switch only disables the daily update poll. For a persistent proxy shared by OMP sessions:
 
 ```text
 /headroom service install
@@ -76,7 +76,7 @@ flowchart TD
     CMD --> UNIT[Optional systemd --user service]
 ```
 
-There is intentionally no second installer script. Keeping provisioning in the plugin prevents an `install.sh` path from drifting away from `omp plugin install`, `/headroom update`, and `/headroom service`.
+Provisioning lives only in the plugin — there is deliberately no separate installer script — so the install path can never drift away from `omp plugin install`, `/headroom update`, and `/headroom service`. If the venv is missing at any session start, the plugin rebuilds it.
 
 Provisioning prefers `uv` when available and otherwise falls back to `python3 -m venv` plus that environment's `pip`; a global `uv` install is not required. Override the fallback interpreter with `OMP_HEADROOM_PYTHON` or the preferred `uv` executable with `OMP_HEADROOM_UV`.
 
@@ -184,7 +184,7 @@ Configuration can live in `~/.omp/agent/headroom.yml` or in `OMP_HEADROOM_*` env
 | `OMP_HEADROOM_LIVE_MESSAGES`                      | `24`                                      | Recent outbound messages retained verbatim after an automatic archive.                                      |
 | `OMP_HEADROOM_PREFIX_MIN_CHARS` / `_SHARE`         | `30000` / `0.45`                          | Minimum stable-prefix size and share required before automatic archival.                                    |
 | `OMP_HEADROOM_ARCHIVE_MAX_MESSAGE_CHARS`           | `900`                                     | Maximum per-message excerpt in the structural archive index; full content stays in CCR.                     |
-| `OMP_HEADROOM_AUTOUPDATE`                          | on                                        | Daily PyPI check + in-place upgrade; `0` disables.                                                          |
+| `OMP_HEADROOM_AUTOUPDATE`                          | on                                        | Daily PyPI check + in-place upgrade; `0` disables the poll only — first-time venv provisioning always runs. |
 | `OMP_HEADROOM_WIDGET_PLACEMENT`                    | `rightEditor`                             | Widget slot (`rightEditor` needs the right-panel fork).                                                     |
 | `OMP_HEADROOM_DEBUG_SIZING`                        | off                                       | `1` records privacy-safe per-stage sizing decisions without payloads or digests.                            |
 | `OMP_HEADROOM_DEBUG`                               | off                                       | `1` logs per-request payload shapes.                                                                        |

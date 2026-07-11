@@ -479,7 +479,6 @@ function maintainInstall(ctx, state, force = false) {
 }
 
 async function doMaintainInstall(ctx, state, force) {
-  if (!AUTOUPDATE && !force) return;
   try {
     if (!existsSync(HEADROOM_BIN)) {
       if (!acquireUpdateLock()) return;
@@ -516,6 +515,9 @@ async function doMaintainInstall(ctx, state, force) {
       return;
     }
 
+    // AUTOUPDATE only disables the daily update poll. First-time provisioning
+    // above must always run: a missing venv is a broken install, not an update.
+    if (!AUTOUPDATE && !force) return;
     if (!state.version) state.version = await installedVersion();
     const stamp = readUpdateStamp();
     if (!force && stamp.checkedAt && Date.now() - stamp.checkedAt < UPDATE_INTERVAL_MS) {
