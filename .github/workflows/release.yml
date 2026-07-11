@@ -1,0 +1,106 @@
+name: Publish first beta
+
+on:
+    push:
+        tags:
+            - "v*"
+
+permissions:
+    contents: write
+    id-token: write
+
+jobs:
+    security:
+        name: Dependency vulnerabilities
+        uses: google/osv-scanner-action/.github/workflows/osv-scanner-reusable.yml@8dc09193bb540e09b23da07ad7e30bd33bf87018 # v2.3.8
+        with:
+            scan-args: --lockfile=bun.lock
+            upload-sarif: false
+            fail-on-vuln: true
+
+    publish:
+        name: Verify, publish, and release
+        needs: security
+        runs-on: ubuntu-latest
+        # GitHub Environment containing the NPM_TOKEN secret.
+        environment: NPM_TOKEN
+        steps:
+            - name: Checkout tagged source
+              uses: actions/checkout@v4
+              with:
+                  fetch-depth: 0
+
+            - name: Setup Bun
+              uses: oven-sh/setup-bun@v2
+              with:
+                  bun-version: latest
+
+            - name: Install locked development dependencies
+              run: bun install --frozen-lockfile
+
+            - name: Verify release identity
+              run: |
+                  node <<'NODE'
+                  const fs = require("node:fs");
+                  const pkg = JSON.parse(fs.readFileSync("package.json", "utf8"));
+                  const versionFile = fs.readFileSync("VERSION", "utf8").trim();
+                  const tag = process.env.GITHUB_REF_NAME;
+                  if (pkg.version !== versionFile) {
+                    throw new Error(`package.json (${pkg.version}) and VERSION (${versionFile}) differ`);
+                  }
+                  if (tag !== `v${pkg.version}`) {
+                    throw new Error(`tag ${tag} must exactly equal v${pkg.version}`);
+                  }
+                  if (!pkg.version.includes("-beta.")) {
+                    throw new Error(`first-release workflow accepts beta versions only: ${pkg.version}`);
+                  }
+                  NODE
+
+            - name: Lint Python plugin
+              uses: astral-sh/ruff-action@0ce1b0bf8b818ef400413f810f8a11cdbda0034b # v4.0.0
+              with:
+                  args: check plugins
+
+            - name: Verify source and runtime contracts
+              run: bun run verify
+
+            - name: Verify tarball contents
+              run: |
+                  npm pack --dry-run --json > "$RUNNER_TEMP/pack.json"
+                  node - "$RUNNER_TEMP/pack.json" <<'NODE'
+                  const [{ files = [] }] = require(process.argv[2]);
+                  const paths = new Set(files.map(({ path }) => path));
+                  for (const path of [
+                    ".github/README.md",
+                    ".github/CHANGELOG.md",
+                    "LICENSE",
+                    "src/index.ts",
+                    "plugins/headroom-omp-stats/pyproject.toml",
+                    "systemd/headroom-proxy.service.in",
+                  ]) {
+                    if (!paths.has(path)) throw new Error(`missing package asset: ${path}`);
+                  }
+                  for (const path of ["extension/headroom.ts", "install.sh"]) {
+                    if (paths.has(path)) throw new Error(`legacy asset must not be published: ${path}`);
+                  }
+                  NODE
+
+            - name: Install packed plugin as an OMP plugin
+              run: |
+                  TARBALL="$(npm pack --json | node -e 'let text=""; process.stdin.on("data", chunk => text += chunk).on("end", () => process.stdout.write(JSON.parse(text)[0].filename))')"
+                  mkdir -p "$RUNNER_TEMP/package"
+                  tar -xzf "$GITHUB_WORKSPACE/$TARBALL" -C "$RUNNER_TEMP/package"
+                  export HOME="$RUNNER_TEMP/omp-home"
+                  export PATH="$GITHUB_WORKSPACE/node_modules/.bin:$PATH"
+                  omp plugin install "$RUNNER_TEMP/package/package"
+                  omp plugin doctor
+
+            - name: Publish npm beta
+              env:
+                  NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+              run: npm publish --tag beta --provenance
+
+            - name: Create prerelease notes
+              env:
+                  GH_TOKEN: ${{ github.token }}
+              run: gh release create "$GITHUB_REF_NAME" --title "$GITHUB_REF_NAME" --generate-notes --prerelease

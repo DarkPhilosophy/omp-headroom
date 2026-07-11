@@ -1,6 +1,6 @@
 ---
 name: Bug report
-about: Something broke — compression, compaction, widget, installer
+about: Something broke — compression, compaction, widget, or service lifecycle
 labels: bug
 ---
 

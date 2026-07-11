@@ -11,7 +11,7 @@ permissions:
 
 jobs:
     extension:
-        name: Extension (check + tests + leak scan)
+        name: Extension (typecheck + tests + leak scan)
         runs-on: ubuntu-latest
         steps:
             - name: Checkout
@@ -22,17 +22,20 @@ jobs:
               with:
                   bun-version: latest
 
-            - name: Syntax check
-              run: bun --check extension/headroom.ts
+            - name: Install locked development dependencies
+              run: bun install --frozen-lockfile
 
-            - name: Compactor + adaptive tests
+            - name: Typecheck
+              run: bun run typecheck
+
+            - name: Behavioral tests
               run: bun test tests/
 
             - name: Leak scan
               run: bun .scripts/scan-leaks.mjs
 
     lint:
-        name: Lint (eslint + prettier)
+        name: Biome
         runs-on: ubuntu-latest
         steps:
             - name: Checkout
@@ -43,14 +46,11 @@ jobs:
               with:
                   bun-version: latest
 
-            - name: Install dev dependencies
-              run: bun install --frozen-lockfile || bun install
+            - name: Install locked development dependencies
+              run: bun install --frozen-lockfile
 
-            - name: ESLint
-              run: bunx eslint tests .scripts --format stylish
-
-            - name: Prettier check
-              run: bunx prettier --check "tests/**/*.mjs" ".scripts/**/*.mjs" "*.json" "*.mjs"
+            - name: Biome check
+              run: bun run check
 
     python:
         name: Python plugin (ruff)
@@ -69,24 +69,59 @@ jobs:
                   pip install ruff
                   ruff check plugins
 
-    shell:
-        name: Installer (shellcheck + bash -n)
+
+    package:
+        name: Package (tarball smoke)
         runs-on: ubuntu-latest
         steps:
             - name: Checkout
               uses: actions/checkout@v4
 
-            - name: Syntax
-              run: bash -n install.sh
+            - name: Setup Bun
+              uses: oven-sh/setup-bun@v2
+              with:
+                  bun-version: latest
 
-            - name: ShellCheck
-              run: shellcheck install.sh
+            - name: Install locked development dependencies
+              run: bun install --frozen-lockfile
 
-            - name: One-line install smoke (no git clone)
+            - name: Check package contents
               run: |
-                  tar --exclude='.git' -czf "$RUNNER_TEMP/omp-headroom.tar.gz" .
-                  mkdir -p "$RUNNER_TEMP/pipe-cwd"
-                  cd "$RUNNER_TEMP/pipe-cwd"
-                  OMP_HEADROOM_ARCHIVE_URL="file://$RUNNER_TEMP/omp-headroom.tar.gz" \
-                  OMP_HEADROOM_UV=true \
-                  bash -s -- --dry-run --agent-dir "$RUNNER_TEMP/agent" < "$GITHUB_WORKSPACE/install.sh"
+                  npm pack --dry-run --json > "$RUNNER_TEMP/pack.json"
+                  node - "$RUNNER_TEMP/pack.json" <<'NODE'
+                  const [{ files = [] }] = require(process.argv[2]);
+                  const paths = new Set(files.map(({ path }) => path));
+                  const expected = [
+                    ".github/README.md",
+                    ".github/CHANGELOG.md",
+                    "LICENSE",
+                    "src/index.ts",
+                    "plugins/headroom-omp-stats/pyproject.toml",
+                    "systemd/headroom-proxy.service.in",
+                  ];
+                  const forbidden = ["extension/headroom.ts", "install.sh", "tests/commands.test.mjs"];
+                  for (const path of expected) {
+                    if (!paths.has(path)) throw new Error(`missing package asset: ${path}`);
+                  }
+                  for (const path of forbidden) {
+                    if (paths.has(path)) throw new Error(`unexpected package asset: ${path}`);
+                  }
+                  NODE
+
+            - name: Install packed plugin as an OMP plugin
+              run: |
+                  TARBALL="$(npm pack --json | node -e 'let text=""; process.stdin.on("data", chunk => text += chunk).on("end", () => process.stdout.write(JSON.parse(text)[0].filename))')"
+                  mkdir -p "$RUNNER_TEMP/package"
+                  tar -xzf "$GITHUB_WORKSPACE/$TARBALL" -C "$RUNNER_TEMP/package"
+                  export HOME="$RUNNER_TEMP/omp-home"
+                  export PATH="$GITHUB_WORKSPACE/node_modules/.bin:$PATH"
+                  omp plugin install "$RUNNER_TEMP/package/package"
+                  omp plugin doctor
+
+    security:
+        name: Dependency vulnerabilities
+        uses: google/osv-scanner-action/.github/workflows/osv-scanner-reusable.yml@8dc09193bb540e09b23da07ad7e30bd33bf87018 # v2.3.8
+        with:
+            scan-args: --lockfile=bun.lock
+            upload-sarif: false
+            fail-on-vuln: true

@@ -4,20 +4,21 @@ Thanks for looking at omp-headroom! Small, focused PRs are the easiest to review
 
 ## Ground rules
 
-1. **Fidelity first.** Any change to compression/compaction must keep originals retrievable. If a payload byte disappears, a `hash=` marker pointing at the stored original must replace it. PRs that trade fidelity for ratio will be declined.
-2. **The extension is one file by design.** `extension/headroom.ts` is a mirrored artifact of the installed copy — OMP loads a single module. Keep helpers pure and testable instead of splitting files.
-3. **Tests before behavior.** Compactor logic changes need a failing test first (`tests/`). Pure functions (`createSessionCompaction`, `adaptiveMinChars`, `expandSessionArchiveText`, …) are exported precisely so they can be tested without a live proxy.
+1. **Fidelity first.** Compression is accepted only when proxy metrics prove a strict token reduction, the outgoing payload is smaller, every user message is unchanged, and the original is persisted under a retrievable CCR hash. PRs that trade fidelity for ratio will be declined.
+2. **Keep runtime responsibilities modular.** `src/index.ts` wires OMP hooks; focused helpers belong in the adjacent `src/*.ts` modules. The npm package loads `src/index.ts` directly.
+3. **Tests before behavior.** Compression or compaction changes need a failing test first under `tests/`, including fail-closed edge cases.
 
 ## Workflow
 
 ```bash
-bun install          # dev deps (eslint, prettier)
-bun run verify       # bun --check + bun test + leak scan — must pass
-bun run lint         # eslint on tests/.scripts
-bun run lint:py      # ruff on plugins/
+bun install          # locked development dependencies
+bun run check        # Biome format + lint
+bun run typecheck    # TypeScript, no emit
+bun run test         # deterministic behavior and integration fixtures
+bun run verify       # check + typecheck + test + leak scan
+bun run lint:py      # Ruff on the proxy stats plugin
 ```
 
-- `bun run sync` shows drift between the repo copy and your installed extension (`~/.omp/agent/extensions/headroom.ts`).
 - `bun .scripts/scan-leaks.mjs` runs the pre-publish leak gate; CI enforces it.
 - Conventional commits (`feat:`, `fix:`, `chore:`, `docs:`) keep the changelog easy to generate.
 

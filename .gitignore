@@ -16,6 +16,7 @@ __pycache__/
 *.zip
 *.tar.gz
 .eslintcache
+temp/
 
 # OS generated files
 .DS_Store
