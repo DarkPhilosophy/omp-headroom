@@ -1,0 +1,34 @@
+name: Move npm dist-tag
+
+on:
+    workflow_dispatch:
+        inputs:
+            version:
+                description: Published package version to point the tag at
+                required: true
+            tag:
+                description: dist-tag to move
+                required: true
+                default: latest
+
+permissions:
+    contents: read
+
+jobs:
+    dist-tag:
+        name: Point dist-tag at published version
+        runs-on: ubuntu-latest
+        environment: npm
+        steps:
+            - name: Setup Node with npm registry auth
+              uses: actions/setup-node@v4
+              with:
+                  node-version: 22
+                  registry-url: https://registry.npmjs.org
+
+            - name: Move dist-tag
+              env:
+                  NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+                  PKG_VERSION: ${{ inputs.version }}
+                  PKG_TAG: ${{ inputs.tag }}
+              run: npm dist-tag add "omp-headroom@$PKG_VERSION" "$PKG_TAG"

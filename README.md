@@ -249,4 +249,4 @@ GitHub also reads [FUNDING.yml](FUNDING.yml) for the repository sponsor button.
 
 ## License
 
-[GPL-3.0-or-later](../LICENSE). Headroom itself is Apache-2.0; see [Credits](#credits).
+[GPL-3.0-or-later](LICENSE). Headroom itself is Apache-2.0; see [Credits](#credits).

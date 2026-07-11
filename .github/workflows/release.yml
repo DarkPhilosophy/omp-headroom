@@ -108,6 +108,13 @@ jobs:
                   NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
               run: npm publish --tag beta --provenance --access public
 
+            # While only beta versions exist, `latest` must track the newest
+            # beta — npm pins `latest` to the first publish otherwise.
+            - name: Point latest at the published beta
+              env:
+                  NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+              run: npm dist-tag add "omp-headroom@$(node -p "require('./package.json').version")" latest
+
             - name: Create prerelease notes
               env:
                   GH_TOKEN: ${{ github.token }}
