@@ -106,7 +106,7 @@ jobs:
             - name: Publish npm beta
               env:
                   NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
-              run: npm publish --tag beta --provenance
+              run: npm publish --tag beta --provenance --access public
 
             - name: Create prerelease notes
               env:
