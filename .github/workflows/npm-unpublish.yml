@@ -1,0 +1,29 @@
+name: Unpublish npm version
+
+on:
+    workflow_dispatch:
+        inputs:
+            version:
+                description: Exact published version to unpublish permanently
+                required: true
+
+permissions:
+    contents: read
+
+jobs:
+    unpublish:
+        name: Unpublish one published version
+        runs-on: ubuntu-latest
+        environment: npm
+        steps:
+            - name: Setup Node with npm registry auth
+              uses: actions/setup-node@v4
+              with:
+                  node-version: 22
+                  registry-url: https://registry.npmjs.org
+
+            - name: Unpublish version
+              env:
+                  NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+                  PKG_VERSION: ${{ inputs.version }}
+              run: npm unpublish "omp-headroom@$PKG_VERSION"

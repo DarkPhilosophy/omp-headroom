@@ -1,5 +1,15 @@
 # Changelog
 
+## 0.1.0-beta.3 — 2026-07-11
+
+### Fixed
+
+- OMP attribution now points at the canonical `can1357/oh-my-pi` repository; the previous link target did not exist. The README license link was repaired after the move to the repository root.
+
+### Removed
+
+- npm versions `0.1.0-beta.1` and `0.1.0-beta.2` were unpublished because their tarballs embedded the broken attribution; repository history was rewritten to remove the stale reference entirely.
+
 ## 0.1.0-beta.2 — 2026-07-11
 
 ### Fixed
