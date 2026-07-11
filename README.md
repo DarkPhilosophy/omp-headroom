@@ -7,7 +7,7 @@
 
 **omp-headroom** integrates the [Headroom](https://github.com/chopratejas/headroom) context-optimization proxy into [OMP (Oh My Pi)](https://github.com/can1357/oh-my-pi) coding sessions. Eligible provider payloads pass through a local compression layer only when Headroom proves a strict token reduction and the extension has persisted the original for retrieval.
 
-> **Current release: [`0.1.0-beta.1`](https://github.com/DarkPhilosophy/omp-headroom/releases/tag/v0.1.0-beta.1)** — published on npm under the `beta` dist-tag. GitHub is the canonical release and documentation source.
+> **Current release: [`0.1.0-beta.2`](https://github.com/DarkPhilosophy/omp-headroom/releases/tag/v0.1.0-beta.2)** — published on npm under the `beta` dist-tag. GitHub is the canonical release and documentation source.
 
 ## How it works
 

@@ -1,10 +1,11 @@
 # Changelog
 
-## Unreleased
+## 0.1.0-beta.2 — 2026-07-11
 
 ### Fixed
 
 - First-time venv provisioning now always runs when the Headroom binary is missing at session start. `OMP_HEADROOM_AUTOUPDATE=0` previously skipped initial installation entirely; it now disables only the daily update poll.
+- The npm package now ships its README at the tarball root so the registry page renders it; GitHub continues to render the same file from the repository root.
 
 ## 0.1.0-beta.1 — 2026-07-11
 

@@ -73,7 +73,7 @@ jobs:
                   const [{ files = [] }] = require(process.argv[2]);
                   const paths = new Set(files.map(({ path }) => path));
                   for (const path of [
-                    ".github/README.md",
+                    "README.md",
                     ".github/CHANGELOG.md",
                     "LICENSE",
                     "src/index.ts",
