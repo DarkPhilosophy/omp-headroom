@@ -24,8 +24,8 @@ jobs:
         name: Verify, publish, and release
         needs: security
         runs-on: ubuntu-latest
-        # GitHub Environment containing the NPM_TOKEN secret.
-        environment: NPM_TOKEN
+        # GitHub Environment "npm" holds the NPM_TOKEN secret.
+        environment: npm
         steps:
             - name: Checkout tagged source
               uses: actions/checkout@v4
