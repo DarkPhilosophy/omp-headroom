@@ -1,0 +1,18 @@
+{
+    "name": "darkphilosophy",
+    "owner": {
+        "name": "DarkPhilosophy"
+    },
+    "metadata": {
+        "description": "OMP plugins by DarkPhilosophy",
+        "version": "1"
+    },
+    "plugins": [
+        {
+            "name": "omp-headroom",
+            "source": "./",
+            "version": "0.1.0-beta.4",
+            "description": "Headroom context-compression integration for OMP: proxy lifecycle, tool-output compression, session archive compaction with CCR retrieval, adaptive thresholds, and a live savings widget."
+        }
+    ]
+}

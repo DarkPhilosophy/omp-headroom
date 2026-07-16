@@ -7,7 +7,7 @@
 
 **omp-headroom** integrates the [Headroom](https://github.com/chopratejas/headroom) context-optimization proxy into [OMP (Oh My Pi)](https://github.com/can1357/oh-my-pi) coding sessions. Eligible provider payloads pass through a local compression layer only when Headroom proves a strict token reduction and the extension has persisted the original for retrieval.
 
-> **Current release: [`0.1.0-beta.3`](https://github.com/DarkPhilosophy/omp-headroom/releases/tag/v0.1.0-beta.3)** — published on npm under the `beta` dist-tag. GitHub is the canonical release and documentation source.
+> **Current release: [`0.1.0-beta.4`](https://github.com/DarkPhilosophy/omp-headroom/releases/tag/v0.1.0-beta.4)** — published on npm under the `beta` dist-tag. GitHub is the canonical release and documentation source.
 
 ## How it works
 
@@ -32,12 +32,26 @@ flowchart LR
 
 ## Install
 
-### After beta publication
+### npm install
 
 ```bash
 omp plugin install omp-headroom@beta
 omp plugin doctor
 ```
+
+npm installs do not update themselves — rerun `omp plugin install omp-headroom@beta` to pick up a newer beta.
+
+### Marketplace install (recommended)
+
+This repository is also an OMP plugin marketplace (`.omp-plugin/marketplace.json`), which gives you managed updates:
+
+```bash
+omp plugin marketplace add DarkPhilosophy/omp-headroom
+omp plugin install omp-headroom@darkphilosophy
+omp plugin doctor
+```
+
+Upgrade explicitly with `omp plugin upgrade`, or set the `marketplace.autoUpdate` setting to `auto` to upgrade marketplace plugins automatically at OMP startup. The default `notify` mode only records available updates in the debug log — it does not show a visible prompt.
 
 Start OMP once — the plugin provisions everything itself: it creates the `headroom-ai` virtual environment at `~/.omp/agent/headroom-venv`, installs `headroom-ai[all]` with the bundled `omp_stats` proxy plugin, re-pins the ROCm Torch build on AMD hardware, and starts the loopback proxy. No manual step is required, and first-time provisioning runs even with `OMP_HEADROOM_AUTOUPDATE=0` — that switch only disables the daily update poll. For a persistent proxy shared by OMP sessions:
 

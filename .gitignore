@@ -31,3 +31,4 @@ Thumbs.db
 *.backup*
 *.bak
 .backup/
+omp-headroom-*.tgz

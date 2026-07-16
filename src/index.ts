@@ -1976,6 +1976,10 @@ export default function headroomExtension(pi: ExtensionAPI) {
     toolRegistrar.registerTool({
       name: RETRIEVE_TOOL,
       label: "Headroom Retrieve",
+      // OMP 17 defers custom tools out of the provider payload by default
+      // ("discoverable"). The compression/archive gates require this tool to
+      // be present in payload.tools, so it must stay top-level.
+      loadMode: "essential",
       description: RETRIEVE_DESCRIPTION,
       parameters: z.object({
         hash: z.string().describe("Hash key from a Headroom compression marker."),

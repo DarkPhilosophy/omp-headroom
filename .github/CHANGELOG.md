@@ -1,5 +1,16 @@
 # Changelog
 
+## 0.1.0-beta.4 — 2026-07-16
+
+### Added
+
+- The repository is now an OMP plugin marketplace (`.omp-plugin/marketplace.json`). Installing via `omp plugin marketplace add DarkPhilosophy/omp-headroom` + `omp plugin install omp-headroom@darkphilosophy` enables managed upgrades (`omp plugin upgrade`, or automatic upgrades with the `marketplace.autoUpdate = auto` setting). The release gate verifies the catalog version matches the package version.
+- The host peer range now covers OMP 16.4+ and 17.
+
+### Fixed
+
+- `headroom_retrieve` now registers with `loadMode: "essential"` so OMP hosts with deferred/discoverable custom tools (OMP 17+) keep it in the outbound provider payload. On OMP 17 the tool silently moved out of `payload.tools`, so the strict fidelity gates correctly failed closed and the extension passed every request through unmodified — no compression, no automatic prefix archiving, no error, and no visible sign beyond frozen widget counters. `/headroom compact` CCR archiving was unaffected.
+
 ## 0.1.0-beta.3 — 2026-07-11
 
 ### Fixed
