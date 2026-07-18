@@ -16,7 +16,6 @@ bun run check        # Biome format + lint
 bun run typecheck    # TypeScript, no emit
 bun run test         # deterministic behavior and integration fixtures
 bun run verify       # check + typecheck + test + leak scan
-bun run lint:py      # Ruff on the proxy stats plugin
 ```
 
 - `bun .scripts/scan-leaks.mjs` runs the pre-publish leak gate; CI enforces it.

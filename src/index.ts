@@ -21,6 +21,7 @@ import {
   clearCcrSession,
   persistCcrByHash,
   persistCcrOriginal,
+  persistCcrOriginalBatch,
   readCcrFallback,
 } from "./ccr.ts";
 import { commandHelpLines, completeHeadroomCommand } from "./commands.ts";
@@ -47,6 +48,7 @@ import {
   MIN_TOOL_TEXT_CHARS,
   PACKAGE_ROOT,
   PACKAGE_SPEC,
+  PROVIDER_MIN_TEXT_CHARS,
   PROVIDER_TIMEOUT_MS,
   PROXY_EXTRA_ARGS,
   PROXY_URL,
@@ -59,7 +61,6 @@ import {
   RETRIEVED_MARKER,
   SESSION_ARCHIVE_ENABLED,
   STATS_MIN_INTERVAL_MS,
-  STATS_PLUGIN_DIR,
   STATS_TOOL,
   TOOL_TIMEOUT_MS,
   UPDATE_INTERVAL_MS,
@@ -71,13 +72,13 @@ import {
 } from "./config.ts";
 import {
   effectiveProviderFormat,
-  hasRetrieveTool,
+  payloadHasRetrieveTool,
   providerPayloadHasCompressionCandidate,
   RETRIEVE_DESCRIPTION,
   responseOutputText,
   systemToText,
 } from "./provider.ts";
-import { isProxyReady, proxyPath, proxyPort } from "./proxy.ts";
+import { isProxyReady, modelUsesHeadroomProxy, proxyPath, proxyPort } from "./proxy.ts";
 import { pipInstallInvocation, venvInvocation } from "./python-env.ts";
 import { parseServiceAction, renderHeadroomUserService } from "./service.ts";
 import {
@@ -112,6 +113,7 @@ export {
   isBeneficialCompressionResult,
   isProxyReady,
   localCompressionLine,
+  modelUsesHeadroomProxy,
   normalizeCompressionResult,
   payloadCharTotal,
   providerPayloadHasCompressionCandidate,
@@ -315,14 +317,6 @@ async function manageHeadroomUserService(action, ctx, state) {
   ctx.ui.notify("Headroom user service disabled and removed.", "info");
 }
 
-async function installStatsPlugin() {
-  if (!existsSync(join(STATS_PLUGIN_DIR, "pyproject.toml"))) return;
-  const result = await installPythonPackages(["--reinstall", STATS_PLUGIN_DIR], 300_000);
-  if (result.code !== 0) {
-    throw new Error(`stats plugin install failed: ${clip(result.err.trim(), 300)}`);
-  }
-}
-
 async function restartProxy(ctx, state) {
   const ownedProcess = state.proxyProcess;
   if (ownedProcess) {
@@ -495,7 +489,6 @@ async function doMaintainInstall(ctx, state, force) {
         const install = await installPythonPackages([PACKAGE_SPEC], 1_800_000);
         if (install.code !== 0)
           throw new Error(`headroom install failed: ${clip(install.err.trim(), 300)}`);
-        await installStatsPlugin();
         // A fresh [all] install pulls CUDA torch even on AMD GPUs. Detect
         // the hardware and re-pin the ROCm build so GPU kompression works.
         if (detectAmdGpu()) {
@@ -542,7 +535,6 @@ async function doMaintainInstall(ctx, state, force) {
       state.installState = "";
       state.version = await installedVersion();
       writeUpdateStamp({ checkedAt: Date.now(), latest: state.version });
-      await installStatsPlugin();
       if (wasRocm) await repinRocmTorch();
       const restarted = await restartProxy(ctx, state);
       ctx?.ui?.notify?.(
@@ -1011,7 +1003,7 @@ async function compressOpenAiMessages(
   tokenBudget,
   timeoutMs,
   state,
-  { skipProject = false, targeted = false } = {},
+  { targeted = false } = {},
 ) {
   // `targeted` = explicit single-tool-output compression: protect_recent 0 so
   // the tool content itself is eligible and analysis protection is disabled.
@@ -1028,13 +1020,12 @@ async function compressOpenAiMessages(
   if (Number.isInteger(tokenBudget) && tokenBudget > 0) body.token_budget = tokenBudget;
   // Per-project routing: /p/<sessionId>/v1/compress lets the proxy track
   // stats per OMP session so multi-instance widgets don't mix data.
-  const project = !skipProject && state?.sessionId ? `/p/${state.sessionId}` : "";
+  const project = state?.sessionId ? `/p/${state.sessionId}` : "";
   const response = await fetch(proxyPath(`${project}/v1/compress`), {
     method: "POST",
     headers: {
       "Content-Type": "application/json",
       "X-Client": "omp",
-      ...(skipProject ? { "X-Headroom-Warmup": "1" } : {}),
     },
     body: JSON.stringify(body),
     signal: AbortSignal.timeout(timeoutMs),
@@ -1145,7 +1136,7 @@ async function persistSessionArchiveCandidate(
 }
 
 async function applyMessageSessionArchive(payload, provider, state, ctx) {
-  if (!hasRetrieveTool(payload.tools)) return payload;
+  if (!payloadHasRetrieveTool(payload)) return payload;
   if (provider === "anthropic") {
     const source = Array.isArray(payload.messages) ? payload.messages : [];
     const candidate = createSessionCompaction(source);
@@ -1167,7 +1158,7 @@ async function applyMessageSessionArchive(payload, provider, state, ctx) {
 }
 
 async function applyResponsesSessionArchive(payload, state, ctx) {
-  if (!hasRetrieveTool(payload.tools)) return payload;
+  if (!payloadHasRetrieveTool(payload)) return payload;
   const input = Array.isArray(payload.input) ? payload.input : [];
   const candidate = createResponsesSessionCompaction(input);
   if (!candidate.compacted) return payload;
@@ -1216,7 +1207,7 @@ function stripEmptyAnthropicTextBlocks(payload) {
 
 async function compressAnthropicPayload(payload, ctx, state) {
   payload = stripEmptyAnthropicTextBlocks(payload);
-  if (!hasRetrieveTool(payload.tools)) return payload;
+  if (!payloadHasRetrieveTool(payload)) return payload;
   if (!ANTHROPIC_COMPRESSION_ENABLED) return payload;
   // Compress only structurally isolated tool_result blocks. A holistic
   // Anthropic→OpenAI→Anthropic round-trip cannot preserve arbitrary content
@@ -1295,6 +1286,115 @@ async function compressAnthropicPayload(payload, ctx, state) {
   return changed ? { ...payload, messages: nextMessages } : payload;
 }
 
+const RESPONSES_BATCH_MAX_ITEMS = 8;
+const RESPONSES_BATCH_MAX_CHARS = MIN_TOOL_TEXT_CHARS * RESPONSES_BATCH_MAX_ITEMS;
+
+function responsesBatchChunks(input, minToolChars) {
+  const chunks: Array<Array<{ index: number; item: Record<string, unknown>; output: string }>> = [];
+  let chunk: Array<{ index: number; item: Record<string, unknown>; output: string }> = [];
+  let chunkChars = 0;
+  const flush = () => {
+    if (chunkChars >= minToolChars) chunks.push(chunk);
+    chunk = [];
+    chunkChars = 0;
+  };
+  for (let index = 0; index < input.length; index++) {
+    const item = input[index];
+    const output = responseOutputText(item);
+    if (
+      !isRecord(item) ||
+      output === undefined ||
+      output.length < PROVIDER_MIN_TEXT_CHARS ||
+      output.length >= minToolChars ||
+      output.includes(COMPRESSED_MARKER) ||
+      output.includes(RETRIEVED_MARKER)
+    ) {
+      continue;
+    }
+    if (
+      chunk.length >= RESPONSES_BATCH_MAX_ITEMS ||
+      (chunk.length > 0 && chunkChars + output.length > RESPONSES_BATCH_MAX_CHARS)
+    ) {
+      flush();
+    }
+    chunk.push({ index, item, output });
+    chunkChars += output.length;
+  }
+  flush();
+  return chunks;
+}
+
+async function compressResponsesBatch(entries, workingPayload, ctx, state) {
+  const toolCalls = entries.map((entry) => {
+    const id =
+      typeof entry.item.call_id === "string"
+        ? entry.item.call_id
+        : `headroom_response_output_${entry.index}`;
+    return {
+      id,
+      type: "function",
+      function: { name: "response_tool", arguments: "{}" },
+    };
+  });
+  const messages = [
+    {
+      role: "user",
+      content: "Compress OpenAI Responses tool outputs for token-efficient reasoning.",
+    },
+    { role: "assistant", content: null, tool_calls: toolCalls },
+    ...entries.map((entry, index) => ({
+      role: "tool",
+      content: entry.output,
+      tool_call_id: toolCalls[index].id,
+    })),
+  ];
+  const result = await compressOpenAiMessages(
+    messages,
+    normalizeModel(workingPayload, ctx),
+    undefined,
+    PROVIDER_TIMEOUT_MS,
+    state,
+    { targeted: true },
+  );
+  if (!isBeneficialCompressionResult(result)) return undefined;
+  const returnedTools = Array.isArray(result.messages)
+    ? result.messages.filter((message) => isRecord(message) && message.role === "tool")
+    : [];
+  if (returnedTools.length !== entries.length) return undefined;
+  const changes: Array<{
+    index: number;
+    item: Record<string, unknown>;
+    originalText: string;
+    compressedText: string;
+  }> = [];
+  for (let index = 0; index < entries.length; index++) {
+    const entry = entries[index];
+    const returned = returnedTools[index];
+    const compressed = isRecord(returned) ? returned.content : undefined;
+    if (
+      !isRecord(returned) ||
+      returned.tool_call_id !== toolCalls[index].id ||
+      typeof compressed !== "string"
+    ) {
+      return undefined;
+    }
+    if (compressed === entry.output) continue;
+    if (compressed.length >= entry.output.length || !compressed.includes(COMPRESSED_MARKER)) {
+      return undefined;
+    }
+    changes.push({
+      index: entry.index,
+      item: { ...entry.item, output: compressed },
+      originalText: entry.output,
+      compressedText: compressed,
+    });
+  }
+  if (changes.length === 0) return undefined;
+  const persisted = await persistCcrOriginalBatch(changes, state, ctx);
+  if (persisted !== changes.length) return undefined;
+  return { changes, result };
+}
+
 export async function compressResponsesPayload(
   payload,
   ctx,
@@ -1303,17 +1403,28 @@ export async function compressResponsesPayload(
 ) {
   const workingPayload = await applyResponsesSessionArchive(payload, state, ctx);
   debugSizingStage(state, debugSeq, "before_compression", workingPayload);
-  if (!hasRetrieveTool(workingPayload.tools)) return workingPayload;
+  if (!payloadHasRetrieveTool(workingPayload)) return workingPayload;
   const input = Array.isArray(workingPayload.input) ? workingPayload.input : [];
   let changed = false;
   if (!providerReady) return workingPayload;
-  // Compress oversized outputs concurrently but bounded (default 3 workers,
-  // OMP_HEADROOM_RESPONSES_CONCURRENCY overrides): a request replaying many
-  // big tool outputs must not stampede the local proxy. Order is preserved by
-  // index; state mutations (counters, CCR persistence) are applied after the
-  // wave, in input order, so completion order never skews the stats.
+  // Batch individually-small outputs when their aggregate clears the adaptive
+  // floor, then compress oversized outputs concurrently with bounded workers.
+  // Input order and unchanged object identity are preserved.
   let _failures = 0;
   const minToolChars = adaptiveMinChars(MIN_TOOL_TEXT_CHARS, contextUsageRatio(ctx));
+  const nextInput: unknown[] = [...input];
+  for (const batchEntries of responsesBatchChunks(input, minToolChars)) {
+    try {
+      const batch = await compressResponsesBatch(batchEntries, workingPayload, ctx, state);
+      if (!batch) continue;
+      for (const entry of batch.changes) nextInput[entry.index] = entry.item;
+      recordCompression(state, "provider", batch.result, ctx);
+      changed = true;
+    } catch {
+      // Batch failure is fail-open; oversized outputs still run independently.
+      _failures += 1;
+    }
+  }
   const compressItem = async (item) => {
     const output = responseOutputText(item);
     if (
@@ -1376,13 +1487,9 @@ export async function compressResponsesPayload(
       },
     ),
   );
-  const nextInput: unknown[] = [];
   for (let index = 0; index < settled.length; index++) {
     const entry = settled[index];
-    if (!entry.result) {
-      nextInput.push(entry.item);
-      continue;
-    }
+    if (!entry.result) continue;
     const persisted = await persistCcrOriginal(
       entry.result,
       entry.output,
@@ -1390,11 +1497,8 @@ export async function compressResponsesPayload(
       state,
       ctx,
     );
-    if (!persisted) {
-      nextInput.push(input[index]);
-      continue;
-    }
-    nextInput.push(entry.item);
+    if (!persisted) continue;
+    nextInput[index] = entry.item;
     recordCompression(state, "provider", entry.result, ctx);
     changed = true;
   }
@@ -1418,36 +1522,6 @@ function recordCompression(state, kind, result, ctx) {
   state.tokensAfter += Math.max(0, asNumber(result?.tokensAfter));
   if (kind === "provider") state.providerCompressions += 1;
   if (kind === "tool") state.toolCompressions += 1;
-}
-
-// Cold-start mitigation: the first /v1/compress after proxy start pays a ~6s
-// penalty loading the local sentence-transformer (hybrid relevance tier);
-// warm calls are ~20ms. Without this, a large first request can exceed the
-// before_provider_request timeout and skip compression (counters stay 0).
-// Fire one tiny throwaway compress at session start so the model is resident
-// before the first real request. Best-effort; never throws; bypasses per-project
-// routing (skipProject) so it warms the model without polluting the session bucket.
-let prewarmed = false;
-async function prewarmCompression(state) {
-  if (prewarmed || !state.proxyReady) return;
-  prewarmed = true;
-  try {
-    const filler = "warmup ".repeat(Math.ceil((MIN_TOOL_TEXT_CHARS + 100) / 7));
-    const messages = [
-      { role: "user", content: "warmup" },
-      {
-        role: "assistant",
-        content: null,
-        tool_calls: [{ id: "warm", type: "function", function: { name: "warm", arguments: "{}" } }],
-      },
-      { role: "tool", content: filler, tool_call_id: "warm" },
-    ];
-    await compressOpenAiMessages(messages, "gpt-4o-mini", undefined, 30_000, state, {
-      skipProject: true,
-    });
-  } catch {
-    prewarmed = false; // allow a retry on the next session_start
-  }
 }
 
 // Fire-and-forget stats refresh + widget repaint for hook paths: the provider
@@ -1559,7 +1633,6 @@ async function ensureProxy(ctx, state, waitMs = 0) {
       const proxyEnv: NodeJS.ProcessEnv = { ...process.env, HEADROOM_TELEMETRY: "off" };
       if (CODE_AWARE) proxyEnv.HEADROOM_CODE_AWARE_ENABLED ??= "1";
       proxyEnv.HEADROOM_NO_SUBSCRIPTION_TRACKING ??= "1";
-      proxyEnv.HEADROOM_PROXY_EXTENSIONS ??= "omp_stats";
       state.proxyProcess = spawn(
         HEADROOM_BIN,
         [
@@ -1745,7 +1818,6 @@ export default function headroomExtension(pi: ExtensionAPI) {
       // first request. The proxy persists per_project[sessionId].
       await fetchStats(state, true);
       renderWidget(ctx, state);
-      void prewarmCompression(state); // load the embedding model now, off the critical path
     })();
   });
 
@@ -1839,6 +1911,9 @@ export default function headroomExtension(pi: ExtensionAPI) {
     const payload = event.payload;
     if (!isRecord(payload) || (!Array.isArray(payload.messages) && !Array.isArray(payload.input)))
       return;
+    // `headroom wrap omp` already routes Anthropic through this proxy. Running
+    // the SDK compression hook as well would double-compress the same request.
+    if (modelUsesHeadroomProxy(ctx?.model)) return;
 
     // DEBUG: ground-truth what the hook sees, to diagnose req=0. Toggle with
     // OMP_HEADROOM_DEBUG=1. Writes one JSON line per request to debug.log.
@@ -1856,17 +1931,26 @@ export default function headroomExtension(pi: ExtensionAPI) {
         if (Array.isArray(payload.input)) {
           const types = {};
           let big = 0;
+          let batchItems = 0;
+          let batchChars = 0;
+          const threshold = adaptiveMinChars(MIN_TOOL_TEXT_CHARS, contextUsageRatio(ctx));
           for (const it of payload.input) {
             const t = isRecord(it) ? String(it.type) : typeof it;
             types[t] = (types[t] || 0) + 1;
             const o = responseOutputText(it);
-            if (typeof o === "string" && o.length >= MIN_TOOL_TEXT_CHARS) big++;
+            if (typeof o === "string" && o.length >= threshold) big++;
+            else if (typeof o === "string" && o.length >= PROVIDER_MIN_TEXT_CHARS) {
+              batchItems++;
+              batchChars += o.length;
+            }
           }
           detail = {
             items: payload.input.length,
             types,
             itemsOverThreshold: big,
-            threshold: MIN_TOOL_TEXT_CHARS,
+            batchCandidates: batchItems,
+            batchCandidateChars: batchChars,
+            threshold,
           };
         } else if (Array.isArray(payload.messages)) {
           detail = { messages: payload.messages.length, model: payload.model || ctx?.model?.id };
@@ -1930,7 +2014,7 @@ export default function headroomExtension(pi: ExtensionAPI) {
         return hr(nextPayload);
       }
 
-      if (!hasRetrieveTool(payload.tools)) return hr(undefined);
+      if (!payloadHasRetrieveTool(payload)) return hr(undefined);
       const workingPayload = await applyMessageSessionArchive(payload, provider, state, ctx);
       const archived = workingPayload !== payload;
       if (archived) archiveFallback = workingPayload;

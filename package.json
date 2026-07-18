@@ -1,6 +1,6 @@
 {
   "name": "omp-headroom",
-  "version": "0.1.0-beta.4",
+  "version": "0.1.0",
   "description": "Headroom context-compression integration for OMP: proxy lifecycle, tool-output compression, session archive compaction with CCR retrieval, adaptive thresholds, and a live savings widget.",
   "author": "DarkPhilosophy",
   "license": "GPL-3.0-or-later",
@@ -22,7 +22,6 @@
   ],
   "files": [
     "src",
-    "plugins/headroom-omp-stats",
     "systemd",
     "README.md",
     ".github/CHANGELOG.md",
@@ -40,7 +39,6 @@
     "typecheck": "tsc --noEmit",
     "test": "bun test tests/",
     "scan": "bun .scripts/scan-leaks.mjs",
-    "lint:py": "ruff check plugins",
     "verify": "bun run check && bun run typecheck && bun run test && bun run scan"
   },
   "peerDependencies": {

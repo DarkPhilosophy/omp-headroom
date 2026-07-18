@@ -81,6 +81,25 @@ async function writeSessionOriginal(
   }
 }
 
+function compressionHashes(
+  result: { ccrHashes?: unknown } | null | undefined,
+  compressedText: unknown,
+): Set<string> {
+  const hashes = new Set<string>();
+  if (Array.isArray(result?.ccrHashes)) {
+    for (const hash of result.ccrHashes) {
+      if (ccrFallbackPath(hash)) hashes.add(hash as string);
+    }
+  }
+  if (typeof compressedText === "string") {
+    for (const match of compressedText.matchAll(/hash=([0-9a-f]{8,})/g)) {
+      const hash = match[1] as string;
+      if (ccrFallbackPath(hash)) hashes.add(hash);
+    }
+  }
+  return hashes;
+}
+
 export async function persistCcrOriginal(
   result: { ccrHashes?: unknown } | null | undefined,
   originalText: unknown,
@@ -89,20 +108,8 @@ export async function persistCcrOriginal(
   ctx: HeadroomCtx | null | undefined,
 ): Promise<number> {
   try {
-    // 0.25.x stopped populating ccr_hashes on /v1/compress; the hashes only
-    // appear as inline "Retrieve more: hash=…" markers in the compressed text.
-    const hashes = new Set<string>();
-    if (Array.isArray(result?.ccrHashes)) {
-      for (const hash of result.ccrHashes) {
-        if (ccrFallbackPath(hash)) hashes.add(hash as string);
-      }
-    }
-    if (typeof compressedText === "string") {
-      for (const match of compressedText.matchAll(/hash=([0-9a-f]{8,})/g)) {
-        const hash = match[1] as string;
-        if (ccrFallbackPath(hash)) hashes.add(hash);
-      }
-    }
+    // Some Headroom versions expose hashes only through inline retrieval markers.
+    const hashes = compressionHashes(result, compressedText);
     const sessionId = storageSessionId(state, ctx);
     if (hashes.size === 0 || typeof originalText !== "string" || !originalText || !sessionId) {
       return 0;
@@ -119,6 +126,45 @@ export async function persistCcrOriginal(
     return 1;
   } catch {
     // Best effort: the proxy store remains the primary source.
+    return 0;
+  }
+}
+
+export interface CcrBatchEntry {
+  originalText: string;
+  compressedText: string;
+}
+
+export async function persistCcrOriginalBatch(
+  entries: CcrBatchEntry[],
+  state: HeadroomState | null | undefined,
+  ctx: HeadroomCtx | null | undefined,
+): Promise<number> {
+  try {
+    const sessionId = storageSessionId(state, ctx);
+    if (!sessionId || entries.length === 0) return 0;
+    const originalsByHash = new Map<string, string>();
+    for (const entry of entries) {
+      if (!entry.originalText) return 0;
+      const hashes = compressionHashes(undefined, entry.compressedText);
+      if (hashes.size === 0) return 0;
+      for (const hash of hashes) {
+        const existing = originalsByHash.get(hash);
+        if (existing !== undefined && existing !== entry.originalText) return 0;
+        originalsByHash.set(hash, entry.originalText);
+      }
+    }
+    await Promise.all(
+      [...originalsByHash].map(([hash, original]) =>
+        writeSessionOriginal(hash, original, sessionId, true),
+      ),
+    );
+    if (state && ctx) {
+      if (isMainSession(ctx)) state.ccrHashes += entries.length;
+      else shared.foreignCcr += entries.length;
+    }
+    return entries.length;
+  } catch {
     return 0;
   }
 }

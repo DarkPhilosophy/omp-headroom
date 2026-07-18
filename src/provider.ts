@@ -74,6 +74,15 @@ export function hasRetrieveTool(tools: unknown): boolean {
   });
 }
 
+export function payloadHasRetrieveTool(payload: unknown): boolean {
+  if (!isRecord(payload)) return false;
+  if (hasRetrieveTool(payload.tools)) return true;
+  if (!Array.isArray(payload.input)) return false;
+  return payload.input.some(
+    (item) => isRecord(item) && item.type === "additional_tools" && hasRetrieveTool(item.tools),
+  );
+}
+
 export function textHasCompressedMarker(text: unknown): boolean {
   return (
     typeof text === "string" &&

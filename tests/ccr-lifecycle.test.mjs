@@ -143,4 +143,34 @@ describe("CCR archive lifecycle", () => {
       expect(runIsolated(root, script)).toBe("ok");
     });
   });
+
+  test("batch persistence rejects a hash collision without publishing counters", async () => {
+    await withTempDir(async (root) => {
+      const script = `
+        process.env.OMP_HEADROOM_BIN = process.argv[1];
+        const fs = await import("node:fs");
+        const path = await import("node:path");
+        const ccr = await import(process.argv[2] + "/src/ccr.ts");
+        const state = { sessionId: "${SESSION_A}", ccrHashes: 0 };
+        const ctx = {
+          hasUI: true,
+          sessionManager: { getSessionId: () => "${SESSION_A}" },
+        };
+        const marker = "[compressed. Retrieve more: hash=${HASH}]";
+        const saved = await ccr.persistCcrOriginalBatch(
+          [
+            { originalText: "first original", compressedText: marker },
+            { originalText: "different original", compressedText: marker },
+          ],
+          state,
+          ctx,
+        );
+        const ccrRoot = path.join(path.dirname(path.dirname(path.dirname(process.argv[1]))), "headroom-ccr");
+        const file = ccr.ccrFallbackPath("${HASH}", ccrRoot, "${SESSION_A}");
+        if (saved !== 0 || state.ccrHashes !== 0 || fs.existsSync(file)) process.exit(2);
+        process.stdout.write("ok");
+      `;
+      expect(runIsolated(root, script)).toBe("ok");
+    });
+  });
 });

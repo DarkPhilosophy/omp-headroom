@@ -54,24 +54,6 @@ jobs:
             - name: Biome check
               run: bun run check
 
-    python:
-        name: Python plugin (ruff)
-        runs-on: ubuntu-latest
-        steps:
-            - name: Checkout
-              uses: actions/checkout@v4
-
-            - name: Setup Python
-              uses: actions/setup-python@v5
-              with:
-                  python-version: '3.13'
-
-            - name: Ruff
-              run: |
-                  pip install ruff
-                  ruff check plugins
-
-
     package:
         name: Package (tarball smoke)
         runs-on: ubuntu-latest
@@ -98,7 +80,6 @@ jobs:
                     ".github/CHANGELOG.md",
                     "LICENSE",
                     "src/index.ts",
-                    "plugins/headroom-omp-stats/pyproject.toml",
                     "systemd/headroom-proxy.service.in",
                   ];
                   const forbidden = ["extension/headroom.ts", "install.sh", "tests/commands.test.mjs"];

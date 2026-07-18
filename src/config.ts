@@ -14,8 +14,6 @@ export const STATS_TOOL = "headroom_stats";
 const DEFAULT_PROXY_URL = "http://127.0.0.1:8787";
 export const HEADROOM_CONFIG_PATH = join(homedir(), ".omp", "agent", "headroom.yml");
 export const PACKAGE_ROOT = dirname(dirname(fileURLToPath(import.meta.url)));
-export const STATS_PLUGIN_DIR =
-  process.env.OMP_HEADROOM_STATS_PLUGIN_DIR ?? join(PACKAGE_ROOT, "plugins", "headroom-omp-stats");
 export const SYSTEMD_TEMPLATE_PATH = join(PACKAGE_ROOT, "systemd", "headroom-proxy.service.in");
 
 export function loadHeadroomConfig(path = HEADROOM_CONFIG_PATH): Record<string, unknown> {

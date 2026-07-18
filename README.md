@@ -7,7 +7,7 @@
 
 **omp-headroom** integrates the [Headroom](https://github.com/chopratejas/headroom) context-optimization proxy into [OMP (Oh My Pi)](https://github.com/can1357/oh-my-pi) coding sessions. Eligible provider payloads pass through a local compression layer only when Headroom proves a strict token reduction and the extension has persisted the original for retrieval.
 
-> **Current release: [`0.1.0-beta.4`](https://github.com/DarkPhilosophy/omp-headroom/releases/tag/v0.1.0-beta.4)** — published on npm under the `beta` dist-tag. GitHub is the canonical release and documentation source.
+> **Current release: [`0.1.0`](https://github.com/DarkPhilosophy/omp-headroom/releases/tag/v0.1.0)** — the first stable release. GitHub is the canonical release and documentation source.
 
 ## How it works
 
@@ -35,11 +35,11 @@ flowchart LR
 ### npm install
 
 ```bash
-omp plugin install omp-headroom@beta
+omp plugin install omp-headroom
 omp plugin doctor
 ```
 
-npm installs do not update themselves — rerun `omp plugin install omp-headroom@beta` to pick up a newer beta.
+npm installs do not update themselves — rerun `omp plugin install omp-headroom` to pick up a newer stable release.
 
 ### Marketplace install (recommended)
 
@@ -53,7 +53,7 @@ omp plugin doctor
 
 Upgrade explicitly with `omp plugin upgrade`, or set the `marketplace.autoUpdate` setting to `auto` to upgrade marketplace plugins automatically at OMP startup. The default `notify` mode only records available updates in the debug log — it does not show a visible prompt.
 
-Start OMP once — the plugin provisions everything itself: it creates the `headroom-ai` virtual environment at `~/.omp/agent/headroom-venv`, installs `headroom-ai[all]` with the bundled `omp_stats` proxy plugin, re-pins the ROCm Torch build on AMD hardware, and starts the loopback proxy. No manual step is required, and first-time provisioning runs even with `OMP_HEADROOM_AUTOUPDATE=0` — that switch only disables the daily update poll. For a persistent proxy shared by OMP sessions:
+Start OMP once — the plugin provisions everything itself: it creates the `headroom-ai` virtual environment at `~/.omp/agent/headroom-venv`, installs the current `headroom-ai[all]`, re-pins the ROCm Torch build on AMD hardware, and starts the loopback proxy. No manual step is required, and first-time provisioning runs even with `OMP_HEADROOM_AUTOUPDATE=0` — that switch only disables the daily update poll. For a persistent proxy shared by OMP sessions:
 
 ```text
 /headroom service install
@@ -144,7 +144,7 @@ In this example, `arch 3.3Mch ×3` means that **three automatic provider archive
 | `saved N` | Proxy tokens saved in the current OMP session. | After Headroom accepts a strictly smaller provider payload. |
 | `proxy N%` | Percentage of attempted proxy input tokens saved. The `proxy` label appears when archive savings share the row; otherwise only `N%` is shown. | Recomputed from the proxy's per-session statistics. |
 | `arch Nch ×M` | Cumulative characters removed (`Nch`) and successful automatic provider-prefix archives (`M`) in this session. | Both values increase only after the complete removed prefix is durably stored in CCR and the outbound archive projection is smaller. |
-| `req N` | Provider requests recorded for this session. | Increases when a provider request is observed by Headroom's proxy statistics. |
+| `req N` | Compression attempts recorded for this session. | Increases only when eligible content is sent to the session's `/v1/compress` endpoint; ordinary provider turns that need no compression do not increment it. |
 | `tool N` | Oversized tool results successfully compressed. | Increases only after a strictly smaller tool result with a retrievable original is accepted. |
 | `ccr N` | New retrievable CCR artifacts created by this process/session. | Increases after a previously unseen original is persisted successfully. |
 | `com N` | Count of completed OMP session compactions, including `/compact` and `/headroom compact`. | Increases on OMP's completed `session_compact` event; it never changes `arch`. |
@@ -188,12 +188,13 @@ Configuration can live in `~/.omp/agent/headroom.yml` or in `OMP_HEADROOM_*` env
 | -------------------------------------------------- | ----------------------------------------- | ----------------------------------------------------------------------------------------------------------- |
 | `OMP_HEADROOM_URL`                                 | `http://127.0.0.1:8787`                   | Proxy endpoint.                                                                                             |
 | `OMP_HEADROOM_BIN`                                 | `~/.omp/agent/headroom-venv/bin/headroom` | Headroom binary.                                                                                            |
-| `OMP_HEADROOM_MIN_TOOL_CHARS`                      | `12000`                                   | Tool-output compression threshold.                                                                          |
+| `OMP_HEADROOM_MIN_TOOL_CHARS`                      | `12000`                                   | Adaptive threshold for individual Responses tool-output compression and the aggregate floor for small-output batches. |
+| `OMP_HEADROOM_MIN_PROVIDER_CHARS`                  | `1000`                                    | Minimum size of one individually-small Responses output considered for aggregate batching.                            |
 | `OMP_HEADROOM_ANTHROPIC_MIN_TOOL_CHARS`            | `8000`                                    | Same, Anthropic `tool_result` blocks.                                                                       |
 | `OMP_HEADROOM_ANTHROPIC_PROVIDER`                  | enabled                                   | Set to `off` to disable safe, isolated Anthropic `tool_result` compression. Holistic conversion is intentionally unsupported. |
 | `OMP_HEADROOM_ADAPTIVE`                            | on                                        | Adaptive thresholds; `0` disables.                                                                          |
 | `OMP_HEADROOM_ADAPTIVE_START` / `_FULL` / `_FLOOR` | `0.5` / `0.9` / `0.25`                    | Context-usage ratio where scaling starts / bottoms out, and the floor as a fraction of the base threshold.  |
-| `OMP_HEADROOM_RESPONSES_CONCURRENCY`               | `3`                                       | Parallel tool-output compressions per request (1–8).                                                        |
+| `OMP_HEADROOM_RESPONSES_CONCURRENCY`               | `3`                                       | Parallel compression workers for oversized individual outputs (1–8); small outputs are aggregated into bounded batches. |
 | `OMP_HEADROOM_SESSION_COMPACTION`                  | on                                        | Legacy-compatible switch for automatic provider-prefix archiving; `0` disables `arch`.                       |
 | `OMP_HEADROOM_LIVE_MESSAGES`                      | `24`                                      | Recent outbound messages retained verbatim after an automatic archive.                                      |
 | `OMP_HEADROOM_PREFIX_MIN_CHARS` / `_SHARE`         | `30000` / `0.45`                          | Minimum stable-prefix size and share required before automatic archival.                                    |
@@ -207,7 +208,7 @@ Configuration can live in `~/.omp/agent/headroom.yml` or in `OMP_HEADROOM_*` env
 <details>
 <summary>Full variable reference</summary>
 
-`OMP_HEADROOM_MIN_PROVIDER_CHARS`, `OMP_HEADROOM_TIMEOUT_MS`, `OMP_HEADROOM_TOOL_TIMEOUT_MS`, `OMP_HEADROOM_ANTHROPIC_PROVIDER`, `OMP_HEADROOM_RAINBOW_MS`, `OMP_HEADROOM_READY_TTL_MS`, `OMP_HEADROOM_STATS_INTERVAL_MS`, `OMP_HEADROOM_PRIORITY`, `OMP_HEADROOM_UPDATE_INTERVAL_MS`, `OMP_HEADROOM_EXTRAS`, `OMP_HEADROOM_CODE_AWARE`, `OMP_HEADROOM_PROXY_ARGS`, `OMP_HEADROOM_FOREIGN_TTL_MS`, `OMP_HEADROOM_WIDGET_MAX_WIDTH`, `OMP_HEADROOM_WIDGET_MIN_WIDTH`, `OMP_HEADROOM_UV`, `OMP_HEADROOM_SYSTEMD_UNIT`, `OMP_HEADROOM_ROCM_TORCH`, `OMP_HEADROOM_ROCM_INDEX`, `OMP_HEADROOM_DISABLED`, `OMP_HEADROOM_ADAPTIVE_START`, `OMP_HEADROOM_ADAPTIVE_FULL`, `OMP_HEADROOM_ADAPTIVE_FLOOR`, `OMP_HEADROOM_RESPONSES_CONCURRENCY`, `OMP_HEADROOM_STATS_PLUGIN_DIR`, and `OMP_AGENT_DIR`.
+`OMP_HEADROOM_TIMEOUT_MS`, `OMP_HEADROOM_TOOL_TIMEOUT_MS`, `OMP_HEADROOM_ANTHROPIC_PROVIDER`, `OMP_HEADROOM_RAINBOW_MS`, `OMP_HEADROOM_READY_TTL_MS`, `OMP_HEADROOM_STATS_INTERVAL_MS`, `OMP_HEADROOM_PRIORITY`, `OMP_HEADROOM_UPDATE_INTERVAL_MS`, `OMP_HEADROOM_EXTRAS`, `OMP_HEADROOM_CODE_AWARE`, `OMP_HEADROOM_PROXY_ARGS`, `OMP_HEADROOM_FOREIGN_TTL_MS`, `OMP_HEADROOM_WIDGET_MAX_WIDTH`, `OMP_HEADROOM_WIDGET_MIN_WIDTH`, `OMP_HEADROOM_UV`, `OMP_HEADROOM_SYSTEMD_UNIT`, `OMP_HEADROOM_ROCM_TORCH`, `OMP_HEADROOM_ROCM_INDEX`, `OMP_HEADROOM_DISABLED`, `OMP_HEADROOM_ADAPTIVE_START`, `OMP_HEADROOM_ADAPTIVE_FULL`, `OMP_HEADROOM_ADAPTIVE_FLOOR`, `OMP_HEADROOM_RESPONSES_CONCURRENCY`, and `OMP_AGENT_DIR`.
 
 </details>
 
@@ -234,7 +235,6 @@ src/session-archive.ts        automatic provider-prefix projection and archive-c
 src/widget.ts                widget rendering and statistics summary
 src/commands.ts              slash-command metadata and completion
 src/tools.ts                 retrieval-tool transport and rendering
-plugins/headroom-omp-stats   proxy plugin: /v1/compress outcomes → /stats
 tests/                       deterministic behavior suites
 ```
 

@@ -1,4 +1,4 @@
-name: Publish first beta
+name: Publish stable release
 
 on:
     push:
@@ -53,8 +53,8 @@ jobs:
                   if (tag !== `v${pkg.version}`) {
                     throw new Error(`tag ${tag} must exactly equal v${pkg.version}`);
                   }
-                  if (!pkg.version.includes("-beta.")) {
-                    throw new Error(`first-release workflow accepts beta versions only: ${pkg.version}`);
+                  if (!/^\d+\.\d+\.\d+$/.test(pkg.version)) {
+                    throw new Error(`stable-release workflow accepts plain semver only: ${pkg.version}`);
                   }
                   const catalog = JSON.parse(fs.readFileSync(".omp-plugin/marketplace.json", "utf8"));
                   const entry = catalog.plugins?.find((plugin) => plugin.name === "omp-headroom");
@@ -62,11 +62,6 @@ jobs:
                     throw new Error(`marketplace catalog version (${entry?.version}) must equal ${pkg.version}`);
                   }
                   NODE
-
-            - name: Lint Python plugin
-              uses: astral-sh/ruff-action@0ce1b0bf8b818ef400413f810f8a11cdbda0034b # v4.0.0
-              with:
-                  args: check plugins
 
             - name: Verify source and runtime contracts
               run: bun run verify
@@ -82,7 +77,6 @@ jobs:
                     ".github/CHANGELOG.md",
                     "LICENSE",
                     "src/index.ts",
-                    "plugins/headroom-omp-stats/pyproject.toml",
                     "systemd/headroom-proxy.service.in",
                   ]) {
                     if (!paths.has(path)) throw new Error(`missing package asset: ${path}`);
@@ -97,10 +91,12 @@ jobs:
                   TARBALL="$(npm pack --json | node -e 'let text=""; process.stdin.on("data", chunk => text += chunk).on("end", () => process.stdout.write(JSON.parse(text)[0].filename))')"
                   mkdir -p "$RUNNER_TEMP/package"
                   tar -xzf "$GITHUB_WORKSPACE/$TARBALL" -C "$RUNNER_TEMP/package"
-                  export HOME="$RUNNER_TEMP/omp-home"
+                  export HOME="$RUNNER_TEMP/smoke-home"
                   export PATH="$GITHUB_WORKSPACE/node_modules/.bin:$PATH"
                   omp plugin install "$RUNNER_TEMP/package/package"
                   omp plugin doctor
+                  env -u OMP_HEADROOM_BIN -u OMP_HEADROOM_MODULE bun .scripts/packed-plugin-smoke.mjs \
+                    "$RUNNER_TEMP/package/package" "$HOME"
 
             - name: Setup Node with npm registry auth
               uses: actions/setup-node@v4
@@ -108,19 +104,13 @@ jobs:
                   node-version: 22
                   registry-url: https://registry.npmjs.org
 
-            - name: Publish npm beta
+            - name: Publish npm release
               env:
                   NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
-              run: npm publish --tag beta --provenance --access public
+              run: npm publish --provenance --access public
 
-            # While only beta versions exist, `latest` must track the newest
-            # beta — npm pins `latest` to the first publish otherwise.
-            - name: Point latest at the published beta
-              env:
-                  NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
-              run: npm dist-tag add "omp-headroom@$(node -p "require('./package.json').version")" latest
 
-            - name: Create prerelease notes
+            - name: Create release notes
               env:
                   GH_TOKEN: ${{ github.token }}
-              run: gh release create "$GITHUB_REF_NAME" --title "$GITHUB_REF_NAME" --generate-notes --prerelease
+              run: gh release create "$GITHUB_REF_NAME" --title "$GITHUB_REF_NAME" --generate-notes

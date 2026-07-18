@@ -1,5 +1,17 @@
 # Changelog
 
+## Unreleased
+
+## 0.1.0 — 2026-07-18
+
+### Fixed
+
+- Current OMP Responses Lite payloads now find the essential `headroom_retrieve` tool inside the leading `additional_tools` input item, restoring automatic compression in both daemon and direct modes.
+- The obsolete `omp_stats` proxy extension was removed because Headroom 0.32 records `/v1/compress` outcomes natively; this prevents doubled request and savings totals without carrying a legacy wrapper.
+- Session startup no longer sends a synthetic `gpt-4o-mini` compression request. Headroom 0.32 performs its own eager preload, so the redundant request only polluted global dashboard statistics.
+- Responses requests now aggregate individually-small tool outputs once their combined size clears the adaptive threshold, while preserving each call ID and accepting the batch only after every changed output has a durable retrieval marker.
+- When OMP is already launched through upstream `headroom wrap omp`, the extension detects the project-prefixed Anthropic endpoint and skips its SDK hook to prevent double compression.
+
 ## 0.1.0-beta.4 — 2026-07-16
 
 ### Added
@@ -69,7 +81,7 @@
 ### Verification
 
 - Deterministic tests cover strict token reduction, missing/equal/increasing metrics, user-message fidelity, automatic provider-prefix archival, resume-safe archive totals, archive-chain recovery, session-owned CCR persistence and guarded cleanup, independent `arch`/`com` counters, distinct `/headroom compact` semantics, service rendering, package assets, and command dispatch.
-- Release gates use frozen Bun installs, Biome, TypeScript, behavioral tests, Ruff, the leak scanner, OSV dependency scanning, package allowlisting, and an extracted-tarball OMP plugin smoke test.
+- Release gates use frozen Bun installs, Biome, TypeScript, behavioral tests, the leak scanner, OSV dependency scanning, package allowlisting, and an extracted-tarball OMP plugin smoke test.
 
 ## Earlier unversioned development history
 

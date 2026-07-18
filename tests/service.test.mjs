@@ -40,7 +40,6 @@ describe("renderHeadroomUserService", () => {
         "Environment=HEADROOM_TELEMETRY=off",
         "Environment=HEADROOM_CODE_AWARE_ENABLED=1",
         "Environment=HEADROOM_NO_SUBSCRIPTION_TRACKING=1",
-        "Environment=HEADROOM_PROXY_EXTENSIONS=omp_stats",
       ]),
     );
   });

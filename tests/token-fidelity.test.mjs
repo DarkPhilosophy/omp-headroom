@@ -343,6 +343,73 @@ describe("token-fidelity — fragment paths honor the shared token gate", () => 
       rmSync(root, { recursive: true, force: true });
     }
   });
+  test("Responses Lite accepts the retriever from the additional_tools input item", () => {
+    const root = mkdtempSync(join(tmpdir(), "headroom-responses-lite-"));
+    const binPath = join(root, "venv", "bin", "headroom");
+    const repo = `${import.meta.dir}/..`;
+    const script = `
+      process.env.OMP_HEADROOM_BIN = process.argv[1];
+      const hash = "fedcba9876543210fedcba98";
+      let requests = 0;
+      const server = Bun.serve({
+        port: 0,
+        async fetch(request) {
+          requests++;
+          const body = await request.json();
+          const messages = body.messages.map((message, index) =>
+            index === body.messages.length - 1
+              ? { ...message, content: "[compressed. Retrieve more: hash=" + hash + "]" }
+              : message
+          );
+          return Response.json({
+            messages,
+            tokens_before: 1000,
+            tokens_after: 100,
+            ccr_hashes: [hash],
+          });
+        },
+      });
+      process.env.OMP_HEADROOM_URL = "http://127.0.0.1:" + server.port;
+      const { compressResponsesPayload } = await import(process.argv[2] + "/src/index.ts");
+      const original = "tool output ".repeat(2000);
+      const payload = {
+        model: "test",
+        input: [
+          {
+            type: "additional_tools",
+            role: "developer",
+            tools: [{ type: "function", name: "headroom_retrieve" }],
+          },
+          { type: "function_call_output", call_id: "c1", output: original },
+        ],
+      };
+      const state = {
+        sessionId: "responses-lite-fidelity",
+        tokensSaved: 0,
+        tokensBefore: 0,
+        tokensAfter: 0,
+        providerCompressions: 0,
+        toolCompressions: 0,
+        ccrHashes: 0,
+      };
+      const result = await compressResponsesPayload(payload, { hasUI: true }, state);
+      await server.stop(true);
+      const output = result.input.find(item => item.type === "function_call_output")?.output;
+      if (requests !== 1) process.exit(2);
+      if (!output?.includes("hash=" + hash)) process.exit(3);
+      if (result.input[0] !== payload.input[0]) process.exit(4);
+      const fs = require("node:fs"), path = require("node:path");
+      const file = path.join(process.argv[3], "headroom-ccr", "responses-lite-fidelity", hash + ".txt");
+      if (!fs.existsSync(file)) process.exit(5);
+      if (fs.readFileSync(file, "utf8") !== original) process.exit(6);
+    `;
+    const result = spawnSync("bun", ["-e", script, binPath, repo, root], { encoding: "utf8" });
+    try {
+      expect(result.status).toBe(0);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
 });
 
 describe("token-fidelity — holistic provider compression is retrieval-gated", () => {
