@@ -2,6 +2,12 @@
 
 ## Unreleased
 
+## 0.1.1 — 2026-07-19
+
+### Added
+
+- Provider prompt-cache telemetry is now accumulated per session and shown on a dedicated widget row with a token-weighted hit rate plus cache read/write token totals.
+
 ## 0.1.0 — 2026-07-18
 
 ### Fixed

@@ -53,6 +53,9 @@ export interface HeadroomState {
   tokensSaved: number;
   tokensBefore: number;
   tokensAfter: number;
+  cacheInputTokens: number;
+  cacheReadTokens: number;
+  cacheWriteTokens: number;
   sessionArchiveCompactions: number;
   ompCompactions: number;
   _ompHydrated: boolean;

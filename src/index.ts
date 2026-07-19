@@ -102,6 +102,7 @@ import {
 } from "./util.ts";
 import {
   archiveSavingsPercent,
+  cacheUsageLine,
   commandSummary,
   localCompressionLine,
   renderWidget,
@@ -110,6 +111,7 @@ import {
 export {
   adaptiveMinChars,
   archiveSavingsPercent,
+  cacheUsageLine,
   isBeneficialCompressionResult,
   isProxyReady,
   localCompressionLine,
@@ -1834,6 +1836,18 @@ export default function headroomExtension(pi: ExtensionAPI) {
   pi.on("session_compact", async (_event, ctx) => {
     if (!isMainSession(ctx)) return;
     state.ompCompactions = (state.ompCompactions || 0) + 1;
+    renderWidget(ctx, state);
+  });
+  // Provider-native prompt cache telemetry. OMP normalizes cache usage on the
+  // finalized assistant message, so this observes the real provider response
+  // without changing provider routing or request payloads.
+  pi.on("message_end", async (event, ctx) => {
+    if (!isMainSession(ctx) || event?.message?.role !== "assistant") return;
+    ensureMainCaptured(ctx);
+    const usage = event.message.usage;
+    state.cacheInputTokens += Math.max(0, asNumber(usage?.input));
+    state.cacheReadTokens += Math.max(0, asNumber(usage?.cacheRead));
+    state.cacheWriteTokens += Math.max(0, asNumber(usage?.cacheWrite));
     renderWidget(ctx, state);
   });
   // Headroom-powered session compaction (hybrid architecture).

@@ -81,6 +81,15 @@ export function compactStatsLine(state: HeadroomState): string {
   return lines.join(" · ");
 }
 
+export function cacheUsageLine(state: HeadroomState): string {
+  const input = Math.max(0, asNumber(state.cacheInputTokens));
+  const read = Math.max(0, asNumber(state.cacheReadTokens));
+  const write = Math.max(0, asNumber(state.cacheWriteTokens));
+  const total = input + read + write;
+  const hitRate = total > 0 ? (read / total) * 100 : 0;
+  return `cache ${formatPct(hitRate)} · read ${formatCompactTokens(read)} · write ${formatCompactTokens(write)}`;
+}
+
 export function archiveSavingsPercent(state: HeadroomState): number {
   const before = Math.max(0, asNumber(state?.sessionArchiveCharsBefore));
   const saved = Math.max(0, asNumber(state?.sessionArchiveCharsSaved));
@@ -132,6 +141,7 @@ export function renderWidget(ctx: HeadroomCtx, state: HeadroomState): void {
   let botRightStyled = ctxUsd > 0 ? ` ${color(90, `ctx ${formatUsd(ctxUsd)}`)} ─` : "";
   const ctxLine = ` ${localCompressionLine(state)}`;
   const activityLine = ` ${compactStatsLine(state)}`;
+  const cacheLine = ` ${cacheUsageLine(state)}`;
   const updateLine = state.installState
     ? ` headroom ${state.installState}…`
     : isNewer(state.latest, state.version)
@@ -143,6 +153,7 @@ export function renderWidget(ctx: HeadroomCtx, state: HeadroomState): void {
       botLeftRaw.length + botRightRaw.length + 1,
       ctxLine.length,
       activityLine.length,
+      cacheLine.length,
       updateLine.length,
     ) + 1,
   );
@@ -156,7 +167,7 @@ export function renderWidget(ctx: HeadroomCtx, state: HeadroomState): void {
     botRightRaw = "";
     botRightStyled = "";
   }
-  const rows = [row(ctxLine, inner), row(activityLine, inner)];
+  const rows = [row(ctxLine, inner), row(cacheLine, inner), row(activityLine, inner)];
   if (updateLine) rows.push(row(updateLine, inner));
   const lines = [
     borderLine(inner, "╭", "╮", topLeftRaw, topLeftStyled, topRightRaw, topRightStyled),

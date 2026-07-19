@@ -7,7 +7,7 @@
 
 **omp-headroom** integrates the [Headroom](https://github.com/chopratejas/headroom) context-optimization proxy into [OMP (Oh My Pi)](https://github.com/can1357/oh-my-pi) coding sessions. Eligible provider payloads pass through a local compression layer only when Headroom proves a strict token reduction and the extension has persisted the original for retrieval.
 
-> **Current release: [`0.1.0`](https://github.com/DarkPhilosophy/omp-headroom/releases/tag/v0.1.0)** — the first stable release. GitHub is the canonical release and documentation source.
+> **Current release: [`0.1.1`](https://github.com/DarkPhilosophy/omp-headroom/releases/tag/v0.1.1)** — adds session-level provider prompt-cache telemetry to the live widget. GitHub is the canonical release and documentation source.
 
 ## How it works
 
@@ -28,7 +28,7 @@ flowchart LR
 - **Headroom-assisted OMP compaction (`/headroom compact`)** — unlike OMP's plain `/compact`, this command arms a one-shot `session.compacting` hook that atomically archives the complete discarded source to CCR and adds fidelity guidance before OMP creates its semantic LLM summary. If archival fails, OMP still compacts but the plugin does not claim a recoverable archive.
 - **Adaptive thresholds** — as the context window fills (>50%), the "worth compressing" bar drops linearly, down to 25% of the base at 90% usage. More compression exactly when space is scarce.
 - **Autoupdate** — the extension checks PyPI daily, upgrades `headroom-ai` in place, re-pins the ROCm torch build when needed, and restarts the proxy.
-- **Live widget** — savings, request/tool/CCR counters, archive state, and per-session cost, rendered in a compact 4-row box.
+- **Live widget** — savings, provider-native prompt-cache hit rate and traffic, request/tool/CCR counters, archive state, and per-session cost, rendered in a compact 5-row box.
 
 ## Install
 
@@ -133,17 +133,19 @@ The unified `arch Nch ×M` metric describes automatic provider-prefix archiving 
 ```text
 ╭─ Headroom ────────────────────────────── session ─╮
 │ saved 192.1k · proxy 6.6% · arch 3.3Mch ×3       │
+│ cache 72% · read 184.0k · write 12.0k             │
 │ req 99 · tool 2 · ccr 5 · com 3                  │
 ╰─ $1.23 · $45.67 ──────────────── ctx $8.90 ──────╯
 ```
 
-In this example, `arch 3.3Mch ×3` means that **three automatic provider archives** succeeded and removed **3.3 million characters in total** from outbound context. The first row reports savings, including archive volume and count; the second reports operation counts for requests, tool compression, CCR artifacts, and OMP compaction.
+In this example, `arch 3.3Mch ×3` means that **three automatic provider archives** succeeded and removed **3.3 million characters in total** from outbound context. The first row reports savings, the dedicated cache row reports provider-native prompt-cache usage for finalized assistant messages, and the third content row reports operation counts for requests, tool compression, CCR artifacts, and OMP compaction.
 
 | Display | Meaning | When it changes |
 | --- | --- | --- |
 | `saved N` | Proxy tokens saved in the current OMP session. | After Headroom accepts a strictly smaller provider payload. |
 | `proxy N%` | Percentage of attempted proxy input tokens saved. The `proxy` label appears when archive savings share the row; otherwise only `N%` is shown. | Recomputed from the proxy's per-session statistics. |
 | `arch Nch ×M` | Cumulative characters removed (`Nch`) and successful automatic provider-prefix archives (`M`) in this session. | Both values increase only after the complete removed prefix is durably stored in CCR and the outbound archive projection is smaller. |
+| `cache N% · read A · write B` | Token-weighted provider prompt-cache hit rate, cached tokens read, and tokens written to cache during this live OMP process. | Aggregated from OMP's normalized usage on each finalized assistant message; it observes provider responses and does not change routing. |
 | `req N` | Compression attempts recorded for this session. | Increases only when eligible content is sent to the session's `/v1/compress` endpoint; ordinary provider turns that need no compression do not increment it. |
 | `tool N` | Oversized tool results successfully compressed. | Increases only after a strictly smaller tool result with a retrievable original is accepted. |
 | `ccr N` | New retrievable CCR artifacts created by this process/session. | Increases after a previously unseen original is persisted successfully. |
