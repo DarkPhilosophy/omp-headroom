@@ -121,9 +121,31 @@ export function stableJson(value: unknown): string {
 }
 
 export function truncateMiddle(text: string, maxChars: number): string {
-  if (typeof text !== "string" || text.length <= maxChars) return text;
+  const source = text.isWellFormed() ? text : text.toWellFormed();
+  if (source.length <= maxChars) return source;
   const half = Math.max(20, Math.floor((maxChars - 40) / 2));
-  return `${text.slice(0, half)}\n… [${text.length - half * 2} chars archived; retrieve full prefix by hash] …\n${text.slice(-half)}`;
+  let prefixEnd = half;
+  if (
+    prefixEnd < source.length &&
+    source.charCodeAt(prefixEnd - 1) >= 0xd800 &&
+    source.charCodeAt(prefixEnd - 1) <= 0xdbff &&
+    source.charCodeAt(prefixEnd) >= 0xdc00 &&
+    source.charCodeAt(prefixEnd) <= 0xdfff
+  ) {
+    prefixEnd -= 1;
+  }
+  let suffixStart = source.length - half;
+  if (
+    suffixStart > 0 &&
+    source.charCodeAt(suffixStart - 1) >= 0xd800 &&
+    source.charCodeAt(suffixStart - 1) <= 0xdbff &&
+    source.charCodeAt(suffixStart) >= 0xdc00 &&
+    source.charCodeAt(suffixStart) <= 0xdfff
+  ) {
+    suffixStart -= 1;
+  }
+  const archivedChars = Math.max(0, suffixStart - prefixEnd);
+  return `${source.slice(0, prefixEnd)}\n… [${archivedChars} chars archived; retrieve full prefix by hash] …\n${source.slice(suffixStart)}`;
 }
 
 // True when `candidate` is a strictly newer dotted version than `current`.

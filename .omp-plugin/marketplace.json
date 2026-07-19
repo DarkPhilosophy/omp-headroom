@@ -11,7 +11,7 @@
         {
             "name": "omp-headroom",
             "source": "./",
-            "version": "0.1.1",
+            "version": "0.1.2",
             "description": "Headroom context-compression integration for OMP: proxy lifecycle, tool-output compression, session archive compaction with CCR retrieval, adaptive thresholds, and a live savings widget."
         }
     ]

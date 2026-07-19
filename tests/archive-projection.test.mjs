@@ -10,6 +10,7 @@ import {
   createSessionCompaction,
   expandSessionArchiveText,
 } from "../src/session-archive.ts";
+import { truncateMiddle } from "../src/util.ts";
 import { compactStatsLine, localCompressionLine } from "../src/widget.ts";
 
 const explicitOptions = {
@@ -139,6 +140,59 @@ describe("automatic provider-path archive projection", () => {
 });
 
 describe("archive boundary safety", () => {
+  test("keeps Responses archive text valid when truncation meets an astral character", () => {
+    const splitPair = `${"a".repeat(39)}😀${"b".repeat(240)}`;
+    const result = createResponsesSessionCompaction(
+      [
+        { type: "message", role: "system", content: [{ type: "input_text", text: "rules" }] },
+        { type: "message", role: "user", content: [{ type: "input_text", text: splitPair }] },
+        {
+          type: "message",
+          role: "assistant",
+          content: [{ type: "output_text", text: "old answer ".repeat(80) }],
+        },
+        { type: "message", role: "user", content: [{ type: "input_text", text: "latest" }] },
+        {
+          type: "message",
+          role: "assistant",
+          content: [{ type: "output_text", text: "latest answer" }],
+        },
+      ],
+      {
+        liveMessages: 2,
+        minPrefixChars: 0,
+        minPrefixShare: 0,
+        archiveMaxMessageChars: 120,
+      },
+    );
+
+    expect(result.compacted).toBe(true);
+    const archive = result.input.find(
+      (item) =>
+        item?.type === "message" &&
+        item?.role === "user" &&
+        item?.content?.[0]?.text?.includes("[Headroom session archive]"),
+    );
+    const archiveText = archive?.content?.[0]?.text;
+    expect(archiveText).toBeDefined();
+    expect(archiveText.isWellFormed()).toBe(true);
+  });
+
+  test("repairs malformed UTF-16 even when no truncation is needed", () => {
+    const result = truncateMiddle("before\uDB80after", 100);
+
+    expect(result).toBe("before\uFFFDafter");
+    expect(result.isWellFormed()).toBe(true);
+  });
+
+  test("keeps the suffix boundary on a complete astral character", () => {
+    const splitPair = `${"a".repeat(199)}😀${"b".repeat(39)}`;
+    const result = truncateMiddle(splitPair, 120);
+
+    expect(result.isWellFormed()).toBe(true);
+    expect(result).toEndWith(`😀${"b".repeat(39)}`);
+  });
+
   test("never leaves an OpenAI Responses function call without its matching output", () => {
     const largeOutput = "tool output ".repeat(900);
     const input = [

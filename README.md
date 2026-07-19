@@ -7,7 +7,7 @@
 
 **omp-headroom** integrates the [Headroom](https://github.com/chopratejas/headroom) context-optimization proxy into [OMP (Oh My Pi)](https://github.com/can1357/oh-my-pi) coding sessions. Eligible provider payloads pass through a local compression layer only when Headroom proves a strict token reduction and the extension has persisted the original for retrieval.
 
-> **Current release: [`0.1.1`](https://github.com/DarkPhilosophy/omp-headroom/releases/tag/v0.1.1)** — adds session-level provider prompt-cache telemetry to the live widget. GitHub is the canonical release and documentation source.
+> **Current release: [`0.1.2`](https://github.com/DarkPhilosophy/omp-headroom/releases/tag/v0.1.2)** — fixes invalid Unicode payloads when session archives truncate astral characters or receive malformed UTF-16. GitHub is the canonical release and documentation source.
 
 ## How it works
 

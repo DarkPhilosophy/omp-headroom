@@ -2,6 +2,12 @@
 
 ## Unreleased
 
+## 0.1.2 — 2026-07-19
+
+### Fixed
+
+- Session archive truncation now preserves Unicode surrogate pairs and repairs malformed UTF-16, preventing OpenAI Codex from rejecting resumed sessions with an invalid Unicode payload.
+
 ## 0.1.1 — 2026-07-19
 
 ### Added

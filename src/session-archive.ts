@@ -7,7 +7,7 @@ import {
   SESSION_PREFIX_MIN_SHARE,
 } from "./config.ts";
 import { collectProviderTextCandidates } from "./provider.ts";
-import { isRecord, stableJson } from "./util.ts";
+import { isRecord, stableJson, truncateMiddle } from "./util.ts";
 
 export const SESSION_ARCHIVE_MARKER = "[Headroom session archive]";
 
@@ -139,12 +139,6 @@ function safeSessionCut(messages: unknown[], requestedCut: number): number {
     }
   }
   return cut;
-}
-
-function truncateMiddle(text: string, maxChars: number): string {
-  if (text.length <= maxChars) return text;
-  const half = Math.max(20, Math.floor((maxChars - 40) / 2));
-  return `${text.slice(0, half)}\n… [${text.length - half * 2} chars archived; retrieve full prefix by hash] …\n${text.slice(-half)}`;
 }
 
 function archiveLineForMessage(message: unknown, index: number, maxChars: number): string {
