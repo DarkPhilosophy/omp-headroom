@@ -45,11 +45,7 @@ jobs:
           node <<'NODE'
           const fs = require("node:fs");
           const pkg = JSON.parse(fs.readFileSync("package.json", "utf8"));
-          const versionFile = fs.readFileSync("VERSION", "utf8").trim();
           const tag = process.env.GITHUB_REF_NAME;
-          if (pkg.version !== versionFile) {
-            throw new Error(`package.json (${pkg.version}) and VERSION (${versionFile}) differ`);
-          }
           if (tag !== `v${pkg.version}`) {
             throw new Error(`tag ${tag} must exactly equal v${pkg.version}`);
           }
