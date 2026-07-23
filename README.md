@@ -41,12 +41,12 @@ omp plugin doctor
 
 npm installs do not update themselves — rerun `omp plugin install omp-headroom` to pick up a newer stable release.
 
-### Marketplace install (recommended)
+### Marketplace install
 
-This repository is also an OMP plugin marketplace (`.omp-plugin/marketplace.json`), which gives you managed updates:
+Managed updates are available through the [darkphilosophy marketplace](https://github.com/DarkPhilosophy/omp-marketplace):
 
 ```bash
-omp plugin marketplace add DarkPhilosophy/omp-headroom
+omp plugin marketplace add DarkPhilosophy/omp-marketplace
 omp plugin install omp-headroom@darkphilosophy
 omp plugin doctor
 ```

@@ -1,116 +1,110 @@
 name: Publish stable release
 
 on:
-    push:
-        tags:
-            - "v*"
+  push:
+    tags:
+      - "v*"
 
 permissions:
-    contents: write
-    id-token: write
-    actions: read
-    security-events: write
+  contents: write
+  id-token: write
+  actions: read
+  security-events: write
 
 jobs:
-    security:
-        name: Dependency vulnerabilities
-        uses: google/osv-scanner-action/.github/workflows/osv-scanner-reusable.yml@8dc09193bb540e09b23da07ad7e30bd33bf87018 # v2.3.8
+  security:
+    name: Dependency vulnerabilities
+    uses: google/osv-scanner-action/.github/workflows/osv-scanner-reusable.yml@8dc09193bb540e09b23da07ad7e30bd33bf87018 # v2.3.8
+    with:
+      scan-args: --lockfile=bun.lock
+      upload-sarif: false
+      fail-on-vuln: true
+
+  publish:
+    name: Verify, publish, and release
+    needs: security
+    runs-on: ubuntu-latest
+    # GitHub Environment "npm" holds the NPM_TOKEN secret.
+    environment: npm
+    steps:
+      - name: Checkout tagged source
+        uses: actions/checkout@v4
         with:
-            scan-args: --lockfile=bun.lock
-            upload-sarif: false
-            fail-on-vuln: true
+          fetch-depth: 0
 
-    publish:
-        name: Verify, publish, and release
-        needs: security
-        runs-on: ubuntu-latest
-        # GitHub Environment "npm" holds the NPM_TOKEN secret.
-        environment: npm
-        steps:
-            - name: Checkout tagged source
-              uses: actions/checkout@v4
-              with:
-                  fetch-depth: 0
+      - name: Setup Bun
+        uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: canary
 
-            - name: Setup Bun
-              uses: oven-sh/setup-bun@v2
-              with:
-                  bun-version: canary
+      - name: Install locked development dependencies
+        run: bun install --frozen-lockfile
 
-            - name: Install locked development dependencies
-              run: bun install --frozen-lockfile
+      - name: Verify release identity
+        run: |
+          node <<'NODE'
+          const fs = require("node:fs");
+          const pkg = JSON.parse(fs.readFileSync("package.json", "utf8"));
+          const versionFile = fs.readFileSync("VERSION", "utf8").trim();
+          const tag = process.env.GITHUB_REF_NAME;
+          if (pkg.version !== versionFile) {
+            throw new Error(`package.json (${pkg.version}) and VERSION (${versionFile}) differ`);
+          }
+          if (tag !== `v${pkg.version}`) {
+            throw new Error(`tag ${tag} must exactly equal v${pkg.version}`);
+          }
+          if (!/^\d+\.\d+\.\d+$/.test(pkg.version)) {
+            throw new Error(`stable-release workflow accepts plain semver only: ${pkg.version}`);
+          }
+          NODE
 
-            - name: Verify release identity
-              run: |
-                  node <<'NODE'
-                  const fs = require("node:fs");
-                  const pkg = JSON.parse(fs.readFileSync("package.json", "utf8"));
-                  const versionFile = fs.readFileSync("VERSION", "utf8").trim();
-                  const tag = process.env.GITHUB_REF_NAME;
-                  if (pkg.version !== versionFile) {
-                    throw new Error(`package.json (${pkg.version}) and VERSION (${versionFile}) differ`);
-                  }
-                  if (tag !== `v${pkg.version}`) {
-                    throw new Error(`tag ${tag} must exactly equal v${pkg.version}`);
-                  }
-                  if (!/^\d+\.\d+\.\d+$/.test(pkg.version)) {
-                    throw new Error(`stable-release workflow accepts plain semver only: ${pkg.version}`);
-                  }
-                  const catalog = JSON.parse(fs.readFileSync(".omp-plugin/marketplace.json", "utf8"));
-                  const entry = catalog.plugins?.find((plugin) => plugin.name === "omp-headroom");
-                  if (entry?.version !== pkg.version) {
-                    throw new Error(`marketplace catalog version (${entry?.version}) must equal ${pkg.version}`);
-                  }
-                  NODE
+      - name: Verify source and runtime contracts
+        run: bun run verify
 
-            - name: Verify source and runtime contracts
-              run: bun run verify
+      - name: Verify tarball contents
+        run: |
+          npm pack --dry-run --json > "$RUNNER_TEMP/pack.json"
+          node - "$RUNNER_TEMP/pack.json" <<'NODE'
+          const [{ files = [] }] = require(process.argv[2]);
+          const paths = new Set(files.map(({ path }) => path));
+          for (const path of [
+            "README.md",
+            ".github/CHANGELOG.md",
+            "LICENSE",
+            "src/index.ts",
+            "systemd/headroom-proxy.service.in",
+          ]) {
+            if (!paths.has(path)) throw new Error(`missing package asset: ${path}`);
+          }
+          for (const path of ["extension/headroom.ts", "install.sh"]) {
+            if (paths.has(path)) throw new Error(`legacy asset must not be published: ${path}`);
+          }
+          NODE
 
-            - name: Verify tarball contents
-              run: |
-                  npm pack --dry-run --json > "$RUNNER_TEMP/pack.json"
-                  node - "$RUNNER_TEMP/pack.json" <<'NODE'
-                  const [{ files = [] }] = require(process.argv[2]);
-                  const paths = new Set(files.map(({ path }) => path));
-                  for (const path of [
-                    "README.md",
-                    ".github/CHANGELOG.md",
-                    "LICENSE",
-                    "src/index.ts",
-                    "systemd/headroom-proxy.service.in",
-                  ]) {
-                    if (!paths.has(path)) throw new Error(`missing package asset: ${path}`);
-                  }
-                  for (const path of ["extension/headroom.ts", "install.sh"]) {
-                    if (paths.has(path)) throw new Error(`legacy asset must not be published: ${path}`);
-                  }
-                  NODE
+      - name: Install packed plugin as an OMP plugin
+        run: |
+          TARBALL="$(npm pack --json | node -e 'let text=""; process.stdin.on("data", chunk => text += chunk).on("end", () => process.stdout.write(JSON.parse(text)[0].filename))')"
+          mkdir -p "$RUNNER_TEMP/package"
+          tar -xzf "$GITHUB_WORKSPACE/$TARBALL" -C "$RUNNER_TEMP/package"
+          export HOME="$RUNNER_TEMP/smoke-home"
+          export PATH="$GITHUB_WORKSPACE/node_modules/.bin:$PATH"
+          omp plugin install "$RUNNER_TEMP/package/package"
+          omp plugin doctor
+          env -u OMP_HEADROOM_BIN -u OMP_HEADROOM_MODULE bun .scripts/packed-plugin-smoke.mjs \
+            "$RUNNER_TEMP/package/package" "$HOME"
 
-            - name: Install packed plugin as an OMP plugin
-              run: |
-                  TARBALL="$(npm pack --json | node -e 'let text=""; process.stdin.on("data", chunk => text += chunk).on("end", () => process.stdout.write(JSON.parse(text)[0].filename))')"
-                  mkdir -p "$RUNNER_TEMP/package"
-                  tar -xzf "$GITHUB_WORKSPACE/$TARBALL" -C "$RUNNER_TEMP/package"
-                  export HOME="$RUNNER_TEMP/smoke-home"
-                  export PATH="$GITHUB_WORKSPACE/node_modules/.bin:$PATH"
-                  omp plugin install "$RUNNER_TEMP/package/package"
-                  omp plugin doctor
-                  env -u OMP_HEADROOM_BIN -u OMP_HEADROOM_MODULE bun .scripts/packed-plugin-smoke.mjs \
-                    "$RUNNER_TEMP/package/package" "$HOME"
+      - name: Setup Node with npm registry auth
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          registry-url: https://registry.npmjs.org
 
-            - name: Setup Node with npm registry auth
-              uses: actions/setup-node@v4
-              with:
-                  node-version: 22
-                  registry-url: https://registry.npmjs.org
+      - name: Publish npm release
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+        run: npm publish --provenance --access public
 
-            - name: Publish npm release
-              env:
-                  NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
-              run: npm publish --provenance --access public
-
-
-            - name: Create release notes
-              env:
-                  GH_TOKEN: ${{ github.token }}
-              run: gh release create "$GITHUB_REF_NAME" --title "$GITHUB_REF_NAME" --generate-notes
+      - name: Create release notes
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh release create "$GITHUB_REF_NAME" --title "$GITHUB_REF_NAME" --generate-notes
