@@ -163,7 +163,7 @@ export const RESPONSES_COMPRESS_CONCURRENCY = Math.max(
 export const PYPI_JSON_URL = "https://pypi.org/pypi/headroom-ai/json";
 
 // ---------------------------------------------------------------------------
-// Declarative settings registry (omp-discord model): one table drives the
+// Declarative settings registry: one table drives the
 // effective-config listing (`/headroom config`), key completion, validation,
 // and persistence (`/headroom set <key> <value>`). Env always wins over YAML,
 // YAML wins over the default.
