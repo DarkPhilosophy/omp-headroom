@@ -1,6 +1,17 @@
 # Changelog
 
-## Unreleased
+## 0.1.3 — 2026-07-23
+
+### Fixed
+
+- Anthropic OAuth sessions now compress and archive again. OMP encodes custom tool names on the Claude wire with a `_` prefix, so the registered `headroom_retrieve` arrived as `_headroom_retrieve` and the strict name gate failed closed on every request: no `/v1/compress` calls, no proxy session registration, and frozen `req`/`tool` counters while Codex sessions kept working. The gate now accepts both spellings.
+
+### Added
+
+- `/headroom config` lists every setting with its effective value and source (env override, `headroom.yml`, or default), plus the config file path.
+- `/headroom set <key> <value>` persists one setting to `headroom.yml` atomically, with key completion, per-kind validation, on/off value completion for booleans, and an explicit warning when an env var overrides the saved value.
+- A declarative settings registry (`HEADROOM_SETTINGS`) now drives the config listing, completion, validation, and persistence from one table.
+- Privacy-safe Anthropic gate diagnostics in the sizing log (`debug_sizing`): per-request tool-result block counts, eligibility against the adaptive threshold, retrieve-tool presence, and proxy readiness — sizes and booleans only, never content.
 
 ## 0.1.2 — 2026-07-19
 

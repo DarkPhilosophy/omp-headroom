@@ -11,8 +11,17 @@
         {
             "name": "omp-headroom",
             "source": "./",
-            "version": "0.1.2",
+            "version": "0.1.3",
             "description": "Headroom context-compression integration for OMP: proxy lifecycle, tool-output compression, session archive compaction with CCR retrieval, adaptive thresholds, and a live savings widget."
+        },
+        {
+            "name": "omp-discord",
+            "source": {
+                "source": "github",
+                "repo": "DarkPhilosophy/omp-discord"
+            },
+            "version": "0.1.1",
+            "description": "Explicit, local Discord account operations for Oh My Pi."
         }
     ]
 }

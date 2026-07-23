@@ -79,3 +79,16 @@ test("provider hook passes through untouched when the retrieve tool is absent", 
   const output = await handlers.get("before_provider_request")({ payload }, ctx);
   expect(output).toBeUndefined();
 });
+
+test("retrieve-tool gate recognizes the Claude OAuth wire prefix", async () => {
+  // OMP encodes custom tool names for Anthropic OAuth requests by prepending
+  // "_" (claudeToolPrefix), so the registered `headroom_retrieve` arrives on
+  // the wire as `_headroom_retrieve`. Strict equality made every anthropic
+  // gate fail closed: no archive, no compression, req/tool counters frozen.
+  const { hasRetrieveTool } = await import("../src/provider.ts");
+  expect(hasRetrieveTool([{ name: "_headroom_retrieve", input_schema: {} }])).toBe(true);
+  expect(hasRetrieveTool([{ name: "headroom_retrieve", input_schema: {} }])).toBe(true);
+  expect(hasRetrieveTool([{ function: { name: "_headroom_retrieve" } }])).toBe(true);
+  expect(hasRetrieveTool([{ name: "__headroom_retrieve" }])).toBe(false);
+  expect(hasRetrieveTool([{ name: "read_file" }])).toBe(false);
+});

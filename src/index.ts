@@ -33,7 +33,6 @@ import {
 } from "./compression.ts";
 import {
   _cfg,
-  ADAPTIVE_THRESHOLDS,
   ANTHROPIC_COMPRESSION_ENABLED,
   ANTHROPIC_MIN_TOOL_TEXT_CHARS,
   AUTOUPDATE,
@@ -42,8 +41,11 @@ import {
   COMPRESSED_MARKER,
   DEBUG_SIZING,
   EXTENSION_KEY,
+  effectiveSettingValue,
   HEADROOM_BIN,
   HEADROOM_CONFIG_PATH,
+  HEADROOM_SETTINGS,
+  invalidSettingValue,
   LOGS_DIR,
   MIN_TOOL_TEXT_CHARS,
   PACKAGE_ROOT,
@@ -53,6 +55,7 @@ import {
   PROXY_EXTRA_ARGS,
   PROXY_URL,
   PYPI_JSON_URL,
+  parseSettingValue,
   RAINBOW_CODES,
   RAINBOW_MS,
   READY_TTL_MS,
@@ -62,6 +65,8 @@ import {
   SESSION_ARCHIVE_ENABLED,
   STATS_MIN_INTERVAL_MS,
   STATS_TOOL,
+  saveHeadroomConfigKey,
+  settingSource,
   TOOL_TIMEOUT_MS,
   UPDATE_INTERVAL_MS,
   UPDATE_LOCK_FILE,
@@ -721,6 +726,20 @@ function debugSizingStage(state, seq, stage, payload) {
     /* never break the hook */
   }
 }
+function debugSizingDiagnostic(state, seq, detail) {
+  if (!DEBUG_SIZING || typeof seq !== "number" || !isRecord(detail)) return;
+  try {
+    const logFile = debugSizingLogPath(state);
+    if (!logFile) return;
+    mkdirSync(LOGS_DIR, { recursive: true });
+    appendFileSync(
+      logFile,
+      `${JSON.stringify({ seq, stage: "anthropic_diagnostic", ...detail })}\n`,
+    );
+  } catch {
+    /* diagnostics must never break the hook */
+  }
+}
 
 function debugSizingOutput(state, seq, payload) {
   if (!DEBUG_SIZING || typeof seq !== "number") return;
@@ -1176,6 +1195,51 @@ function anthropicToolResultText(block) {
   const textBlocks = getTextBlocks(block.content);
   if (textBlocks.length !== block.content.length) return undefined;
   return textBlocks.map((item) => item.text).join("\n");
+}
+function anthropicCompressionDiagnostic(payload, ctx) {
+  const minToolChars = adaptiveMinChars(ANTHROPIC_MIN_TOOL_TEXT_CHARS, contextUsageRatio(ctx));
+  const messages = Array.isArray(payload?.messages) ? payload.messages : [];
+  let toolResultBlocks = 0;
+  let textToolResultBlocks = 0;
+  let eligibleToolResultBlocks = 0;
+  let markedToolResultBlocks = 0;
+  let missingCallIdBlocks = 0;
+  let maxToolResultChars = 0;
+
+  for (const message of messages) {
+    if (!isRecord(message) || message.role !== "user" || !Array.isArray(message.content)) {
+      continue;
+    }
+    for (const block of message.content) {
+      if (!isRecord(block) || block.type !== "tool_result") continue;
+      toolResultBlocks++;
+      if (typeof block.tool_use_id !== "string" || !block.tool_use_id) {
+        missingCallIdBlocks++;
+      }
+      const text = anthropicToolResultText(block);
+      if (text === undefined) continue;
+      textToolResultBlocks++;
+      maxToolResultChars = Math.max(maxToolResultChars, text.length);
+      if (text.includes(COMPRESSED_MARKER) || text.includes(RETRIEVED_MARKER)) {
+        markedToolResultBlocks++;
+      } else if (text.length >= minToolChars) {
+        eligibleToolResultBlocks++;
+      }
+    }
+  }
+
+  return {
+    enabled: ANTHROPIC_COMPRESSION_ENABLED,
+    hasRetrieveTool: payloadHasRetrieveTool(payload),
+    messageCount: messages.length,
+    minToolChars,
+    toolResultBlocks,
+    textToolResultBlocks,
+    eligibleToolResultBlocks,
+    markedToolResultBlocks,
+    missingCallIdBlocks,
+    maxToolResultChars,
+  };
 }
 
 // Anthropic rejects messages containing empty text content blocks with
@@ -1927,7 +1991,19 @@ export default function headroomExtension(pi: ExtensionAPI) {
       return;
     // `headroom wrap omp` already routes Anthropic through this proxy. Running
     // the SDK compression hook as well would double-compress the same request.
-    if (modelUsesHeadroomProxy(ctx?.model)) return;
+    if (modelUsesHeadroomProxy(ctx?.model)) {
+      if (DEBUG_SIZING) {
+        state._debugReqSeq = asNumber(state._debugReqSeq) + 1;
+        const seq = state._debugReqSeq;
+        debugSizingInput(state, seq, payload);
+        debugSizingDiagnostic(state, seq, {
+          skippedHeadroomProxy: true,
+          format: Array.isArray(payload.messages) ? "messages" : "input",
+        });
+        debugSizingOutput(state, seq, payload);
+      }
+      return;
+    }
 
     // DEBUG: ground-truth what the hook sees, to diagnose req=0. Toggle with
     // OMP_HEADROOM_DEBUG=1. Writes one JSON line per request to debug.log.
@@ -2012,12 +2088,23 @@ export default function headroomExtension(pi: ExtensionAPI) {
         const workingPayload = await applyMessageSessionArchive(payload, provider, state, ctx);
         const archived = workingPayload !== payload;
         if (archived) archiveFallback = workingPayload;
-        if (!providerPayloadHasCompressionCandidate(workingPayload)) {
+        const candidate = providerPayloadHasCompressionCandidate(workingPayload);
+        if (!candidate) {
+          debugSizingDiagnostic(state, seq, {
+            ...anthropicCompressionDiagnostic(workingPayload, ctx),
+            candidate,
+            proxyReady: null,
+          });
           state.lastError = "";
           renderWidget(ctx, state);
           return hr(archived ? workingPayload : undefined);
         }
         const ready = await ensureProxy(ctx, state, 1_000);
+        debugSizingDiagnostic(state, seq, {
+          ...anthropicCompressionDiagnostic(workingPayload, ctx),
+          candidate,
+          proxyReady: ready,
+        });
         if (!ready) {
           renderWidget(ctx, state);
           return hr(archived ? workingPayload : undefined);
@@ -2158,7 +2245,7 @@ export default function headroomExtension(pi: ExtensionAPI) {
   const UPDATE_AUTO_CLEAR_MS = 45_000;
   const headroomCommand = {
     description:
-      "Manage Headroom: stats, on, off, compact, clear, test, service, version, config, debug, start, stop, restart, update",
+      "Manage Headroom: stats, on, off, compact, clear, test, service, version, config, set, debug, start, stop, restart, update",
     getArgumentCompletions: (prefix) => completeHeadroomCommand(prefix, HEADROOM_TEST_SURFACES),
     handler: async (args, ctx) => {
       const parts = String(args || "")
@@ -2258,20 +2345,52 @@ export default function headroomExtension(pi: ExtensionAPI) {
           "info",
         );
       } else if (action === "config") {
-        const envHints = [
-          `OMP_HEADROOM_MIN_TOOL_CHARS=${MIN_TOOL_TEXT_CHARS} (${process.env.OMP_HEADROOM_MIN_TOOL_CHARS ? "override" : "default"})`,
-          `OMP_HEADROOM_AUTOUPDATE=${AUTOUPDATE ? "on" : "off"} (${process.env.OMP_HEADROOM_AUTOUPDATE !== undefined ? "override" : "default"})`,
-          `OMP_HEADROOM_DEBUG_SIZING=${DEBUG_SIZING ? "on" : "off"}`,
-        ];
+        const rows = HEADROOM_SETTINGS.map((setting) => {
+          const value = effectiveSettingValue(setting);
+          const rendered = typeof value === "boolean" ? (value ? "on" : "off") : String(value);
+          const source = settingSource(setting);
+          const invalid = invalidSettingValue(setting);
+          const suffix = invalid === undefined ? "" : ` — invalid "${invalid}", using default`;
+          return `  ${setting.key} = ${rendered} (${source === "env" ? setting.env : source})${suffix}`;
+        });
         ctx.ui.notify(
-          `Headroom config:\n  ${[
-            `adaptive: ${ADAPTIVE_THRESHOLDS ? "on" : "off"}`,
-            `provider archive: ${SESSION_ARCHIVE_ENABLED ? "on" : "off"}`,
-            `proxy: ${state.version || "?"} ${state.proxyReady ? "ready" : "offline"}`,
-            ...envHints,
-          ].join("\n  ")}`,
+          `Headroom config — ${HEADROOM_CONFIG_PATH}${existsSync(HEADROOM_CONFIG_PATH) ? "" : " (absent)"}\n` +
+            `${rows.join("\n")}\n` +
+            `  proxy: ${state.version || "?"} ${state.proxyReady ? "ready" : "offline"}\n` +
+            `Change with: /headroom set <key> <value>`,
           "info",
         );
+      } else if (action === "set") {
+        const match = sub.match(/^(\S+)(?:\s+([\s\S]+))?$/);
+        const key = match?.[1] ?? "";
+        const rawValue = match?.[2] ?? "";
+        const setting = HEADROOM_SETTINGS.find((entry) => entry.key === key);
+        if (!setting) {
+          const known = HEADROOM_SETTINGS.map((entry) => entry.key).join(", ");
+          ctx.ui.notify(
+            key
+              ? `Unknown Headroom setting "${key}". Known keys: ${known}`
+              : `Usage: /headroom set <key> <value>\nKnown keys: ${known}`,
+            "warn",
+          );
+        } else {
+          try {
+            const parsed = parseSettingValue(setting, rawValue);
+            await saveHeadroomConfigKey(setting.key, parsed);
+            const rendered = typeof parsed === "boolean" ? (parsed ? "on" : "off") : String(parsed);
+            const overriddenByEnv = settingSource(setting) === "env";
+            ctx.ui.notify(
+              `Saved ${setting.key} = ${rendered} to ${HEADROOM_CONFIG_PATH}.\n` +
+                (overriddenByEnv
+                  ? `Warning: ${setting.env} is set and overrides the YAML value.\n`
+                  : "") +
+                `Takes effect after /reload-plugins or a new session.`,
+              "info",
+            );
+          } catch (error) {
+            ctx.ui.notify(`Headroom set failed: ${errorMessage(error)}`, "error");
+          }
+        }
       } else if (action === "debug") {
         const logFile = debugSizingLogPath(state);
         ctx.ui.notify(

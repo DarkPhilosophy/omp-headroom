@@ -2,6 +2,7 @@
 // and env-var overrides. Env vars (OMP_HEADROOM_*) always take priority over the
 // YAML file; unknown keys are ignored; a malformed file falls back to env-only.
 import { existsSync, readFileSync } from "node:fs";
+import { mkdir, rename, rm, writeFile } from "node:fs/promises";
 import { homedir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -160,3 +161,242 @@ export const RESPONSES_COMPRESS_CONCURRENCY = Math.max(
   Math.min(8, Number(process.env.OMP_HEADROOM_RESPONSES_CONCURRENCY || 3) || 3),
 );
 export const PYPI_JSON_URL = "https://pypi.org/pypi/headroom-ai/json";
+
+// ---------------------------------------------------------------------------
+// Declarative settings registry (omp-discord model): one table drives the
+// effective-config listing (`/headroom config`), key completion, validation,
+// and persistence (`/headroom set <key> <value>`). Env always wins over YAML,
+// YAML wins over the default.
+export interface HeadroomSetting {
+  /** Flat YAML key in ~/.omp/agent/headroom.yml (e.g. "min_tool_chars"). */
+  key: string;
+  env: string;
+  kind: "number" | "boolean" | "string";
+  def: string | number | boolean;
+  description: string;
+}
+
+export const HEADROOM_SETTINGS: readonly HeadroomSetting[] = [
+  {
+    key: "bin",
+    env: "OMP_HEADROOM_BIN",
+    kind: "string",
+    def: DEFAULT_HEADROOM_BIN,
+    description: "Headroom proxy binary path",
+  },
+  {
+    key: "min_tool_chars",
+    env: "OMP_HEADROOM_MIN_TOOL_CHARS",
+    kind: "number",
+    def: 12_000,
+    description: "Responses per-item compression threshold (chars)",
+  },
+  {
+    key: "anthropic_min_tool_chars",
+    env: "OMP_HEADROOM_ANTHROPIC_MIN_TOOL_CHARS",
+    kind: "number",
+    def: 8_000,
+    description: "Anthropic tool_result compression threshold (chars)",
+  },
+  {
+    key: "min_provider_chars",
+    env: "OMP_HEADROOM_MIN_PROVIDER_CHARS",
+    kind: "number",
+    def: 1_000,
+    description: "Minimum text size considered a compression candidate (chars)",
+  },
+  {
+    key: "adaptive",
+    env: "OMP_HEADROOM_ADAPTIVE",
+    kind: "boolean",
+    def: true,
+    description: "Scale thresholds down as context usage grows",
+  },
+  {
+    key: "adaptive_start",
+    env: "OMP_HEADROOM_ADAPTIVE_START",
+    kind: "number",
+    def: 0.5,
+    description: "Context usage ratio where adaptive scaling starts",
+  },
+  {
+    key: "adaptive_full",
+    env: "OMP_HEADROOM_ADAPTIVE_FULL",
+    kind: "number",
+    def: 0.9,
+    description: "Context usage ratio where thresholds reach the floor",
+  },
+  {
+    key: "adaptive_floor",
+    env: "OMP_HEADROOM_ADAPTIVE_FLOOR",
+    kind: "number",
+    def: 0.25,
+    description: "Lowest threshold multiplier under adaptive scaling",
+  },
+  {
+    key: "debug_sizing",
+    env: "OMP_HEADROOM_DEBUG_SIZING",
+    kind: "boolean",
+    def: false,
+    description: "Write per-request sizing/diagnostic JSONL logs",
+  },
+  {
+    key: "session_archive",
+    env: "OMP_HEADROOM_SESSION_COMPACTION",
+    kind: "boolean",
+    def: true,
+    description: "Archive stable transcript prefixes into retrievable summaries",
+  },
+  {
+    key: "session_live_messages",
+    env: "OMP_HEADROOM_LIVE_MESSAGES",
+    kind: "number",
+    def: 24,
+    description: "Recent messages always kept out of the session archive",
+  },
+  {
+    key: "session_prefix_min_chars",
+    env: "OMP_HEADROOM_PREFIX_MIN_CHARS",
+    kind: "number",
+    def: 30_000,
+    description: "Minimum archivable prefix size (chars)",
+  },
+  {
+    key: "session_prefix_min_share",
+    env: "OMP_HEADROOM_PREFIX_MIN_SHARE",
+    kind: "number",
+    def: 0.45,
+    description: "Minimum archivable prefix share of the payload",
+  },
+  {
+    key: "session_archive_max_message_chars",
+    env: "OMP_HEADROOM_ARCHIVE_MAX_MESSAGE_CHARS",
+    kind: "number",
+    def: 900,
+    description: "Per-message excerpt cap inside the session archive",
+  },
+  {
+    key: "archive_stats_dir",
+    env: "OMP_HEADROOM_ARCHIVE_STATS_DIR",
+    kind: "string",
+    def: join(dirname(VENV_DIR), "headroom-archive-stats"),
+    description: "Directory for durable per-session archive counters",
+  },
+];
+
+export type SettingSource = "env" | "yaml" | "default";
+
+export function settingSource(
+  setting: HeadroomSetting,
+  cfg: Record<string, unknown> = _cfg,
+  env: Record<string, string | undefined> = process.env,
+): SettingSource {
+  if (env[setting.env] !== undefined) return "env";
+  if (setting.key in cfg) return "yaml";
+  return "default";
+}
+
+export function effectiveSettingValue(
+  setting: HeadroomSetting,
+  cfg: Record<string, unknown> = _cfg,
+  env: Record<string, string | undefined> = process.env,
+): string | number | boolean {
+  const raw =
+    env[setting.env] !== undefined
+      ? env[setting.env]
+      : setting.key in cfg
+        ? cfg[setting.key]
+        : undefined;
+  if (raw === undefined) return setting.def;
+  if (setting.kind === "number") {
+    const n = Number(raw);
+    return Number.isFinite(n) ? n : setting.def;
+  }
+  if (setting.kind === "boolean") {
+    if (typeof raw === "boolean") return raw;
+    const s = String(raw).toLowerCase();
+    if (["1", "true", "on", "yes"].includes(s)) return true;
+    if (["0", "false", "off", "no"].includes(s)) return false;
+    return setting.def;
+  }
+  return String(raw);
+}
+
+/**
+ * Returns the raw override text when an env/yaml value cannot be parsed for
+ * its kind (so callers can warn instead of silently using the default), or
+ * undefined when the override is absent or valid.
+ */
+export function invalidSettingValue(
+  setting: HeadroomSetting,
+  cfg: Record<string, unknown> = _cfg,
+  env: Record<string, string | undefined> = process.env,
+): string | undefined {
+  const raw =
+    env[setting.env] !== undefined
+      ? env[setting.env]
+      : setting.key in cfg
+        ? cfg[setting.key]
+        : undefined;
+  if (raw === undefined) return undefined;
+  if (setting.kind === "number") {
+    return Number.isFinite(Number(raw)) ? undefined : String(raw);
+  }
+  if (setting.kind === "boolean") {
+    if (typeof raw === "boolean") return undefined;
+    const s = String(raw).toLowerCase();
+    return ["1", "true", "on", "yes", "0", "false", "off", "no"].includes(s)
+      ? undefined
+      : String(raw);
+  }
+  return undefined;
+}
+
+/** Parse and validate a user-supplied value for one setting. Throws on invalid input. */
+export function parseSettingValue(
+  setting: HeadroomSetting,
+  value: string,
+): string | number | boolean {
+  const trimmed = value.trim();
+  if (!trimmed) throw new Error(`"${setting.key}" requires a value`);
+  if (setting.kind === "number") {
+    const n = Number(trimmed);
+    if (!Number.isFinite(n)) throw new Error(`"${setting.key}" expects a number, got "${trimmed}"`);
+    return n;
+  }
+  if (setting.kind === "boolean") {
+    const s = trimmed.toLowerCase();
+    if (["1", "true", "on", "yes"].includes(s)) return true;
+    if (["0", "false", "off", "no"].includes(s)) return false;
+    throw new Error(`"${setting.key}" expects on/off, got "${trimmed}"`);
+  }
+  return trimmed;
+}
+
+/**
+ * Persist one setting to headroom.yml atomically (temp file + rename). Other
+ * keys — including unknown ones — are preserved verbatim. The in-memory
+ * constants are computed at import, so a change takes effect on the next
+ * session or /reload-plugins.
+ */
+export async function saveHeadroomConfigKey(
+  key: string,
+  value: string | number | boolean,
+  path = HEADROOM_CONFIG_PATH,
+): Promise<void> {
+  const root = loadHeadroomConfig(path);
+  root[key] = value;
+  const directory = dirname(path);
+  await mkdir(directory, { recursive: true });
+  const temporaryPath = join(
+    directory,
+    `.headroom.yml.${process.pid}.${Date.now().toString(36)}.tmp`,
+  );
+  try {
+    await writeFile(temporaryPath, Bun.YAML.stringify(root), { encoding: "utf8", mode: 0o600 });
+    await rename(temporaryPath, path);
+  } catch (error) {
+    await rm(temporaryPath, { force: true }).catch(() => undefined);
+    throw error;
+  }
+}

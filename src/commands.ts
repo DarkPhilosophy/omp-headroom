@@ -1,3 +1,6 @@
+import type { HeadroomSetting } from "./config.ts";
+import { HEADROOM_SETTINGS } from "./config.ts";
+
 export interface HeadroomSubcommand {
   label: string;
   description: string;
@@ -20,7 +23,8 @@ export const SUBCOMMANDS: readonly HeadroomSubcommand[] = [
   { label: "service", description: "Install, remove, or inspect the Headroom user service" },
   { label: "help", description: "List all subcommands with descriptions" },
   { label: "version", description: "Show versions, paths, and running status" },
-  { label: "config", description: "Show current configuration" },
+  { label: "config", description: "Show the effective configuration and its source path" },
+  { label: "set", description: "Persist one configuration key to headroom.yml" },
   { label: "debug", description: "Show debug info (logs, sizing)" },
   { label: "start", description: "Start the Headroom proxy" },
   { label: "stop", description: "Stop the Headroom proxy" },
@@ -58,6 +62,36 @@ export function completeHeadroomCommand(
     return matches.length ? matches : null;
   }
 
+  if (normalized === "set" || normalized.startsWith("set ")) {
+    // Use the untrimmed prefix: a trailing space means the key is complete
+    // and the user is now entering the value.
+    const rest = String(prefix || "")
+      .toLowerCase()
+      .replace(/^\s*set\s+/, "");
+    const [keyPrefix, ...valueParts] = rest.split(/\s+/);
+    const setting = HEADROOM_SETTINGS.find((entry) => entry.key === keyPrefix);
+    if (setting && (valueParts.length > 0 || rest.endsWith(" "))) {
+      if (setting.kind !== "boolean") return null;
+      const valuePrefix = valueParts.join(" ");
+      const options = ["on", "off"]
+        .filter((option) => option.startsWith(valuePrefix))
+        .map((option) => ({
+          value: `set ${setting.key} ${option}`,
+          label: option,
+          description: setting.description,
+        }));
+      return options.length ? options : null;
+    }
+    const keys = HEADROOM_SETTINGS.filter((entry) => entry.key.startsWith(keyPrefix ?? "")).map(
+      (entry) => ({
+        value: `set ${entry.key} `,
+        label: entry.key,
+        description: settingCompletionDescription(entry),
+      }),
+    );
+    return keys.length ? keys : null;
+  }
+
   if (normalized.startsWith("test ")) {
     const surfacePrefix = normalized.slice("test ".length);
     const fixtures = testSurfaces
@@ -78,4 +112,9 @@ export function completeHeadroomCommand(
 
 export function commandHelpLines(): string[] {
   return SUBCOMMANDS.map((command) => `  /headroom ${command.label} — ${command.description}`);
+}
+
+function settingCompletionDescription(setting: HeadroomSetting): string {
+  const def = typeof setting.def === "boolean" ? (setting.def ? "on" : "off") : String(setting.def);
+  return `${setting.description} (${setting.kind}, default ${def})`;
 }

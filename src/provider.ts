@@ -64,12 +64,19 @@ export function effectiveProviderFormat(
   return inferred;
 }
 
+// OMP encodes custom tool names on the Anthropic OAuth wire by prepending the
+// Claude tool prefix ("_"), so the registered `headroom_retrieve` arrives as
+// `_headroom_retrieve`. Accept both spellings or every anthropic gate fails.
+function isRetrieveToolName(name: unknown): boolean {
+  return name === RETRIEVE_TOOL || name === `_${RETRIEVE_TOOL}`;
+}
+
 export function hasRetrieveTool(tools: unknown): boolean {
   if (!Array.isArray(tools)) return false;
   return tools.some((tool) => {
     if (!isRecord(tool)) return false;
-    if (tool.name === RETRIEVE_TOOL) return true;
-    if (isRecord(tool.function) && tool.function.name === RETRIEVE_TOOL) return true;
+    if (isRetrieveToolName(tool.name)) return true;
+    if (isRecord(tool.function) && isRetrieveToolName(tool.function.name)) return true;
     return false;
   });
 }
