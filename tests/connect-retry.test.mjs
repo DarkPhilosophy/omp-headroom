@@ -104,4 +104,21 @@ describe("connectWithRetry", () => {
     expect(state.connectExhausted).toBe(false);
     expect(state.lastError).toBe("");
   });
+  test("does not pre-set proxyStarting before probing, so ensureProxy's spawn guard stays open", async () => {
+    // Regression: connectWithRetry once set state.proxyStarting = true before the
+    // first probe, which defeated ensureProxy's `if (!state.proxyStarting && ...)
+    // spawn` guard — the headroom binary was never launched and the
+    // packed-plugin smoke timed out at 12s. proxyStarting is ensureProxy's to own.
+    const captured = [];
+    const state = makeState();
+    await connectWithRetry(makeCtx(), state, {
+      probe: async (_c, s) => {
+        captured.push(s.proxyStarting);
+        return true;
+      },
+      onRender: noopRender,
+      sleep: async () => {},
+    });
+    expect(captured[0]).toBe(false);
+  });
 });

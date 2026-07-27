@@ -1779,7 +1779,6 @@ export async function connectWithRetry(
   state.connectAttempt = 0;
   state.connectExhausted = false;
   state.lastError = "";
-  state.proxyStarting = true;
   onRender(ctx, state);
   for (let i = 0; i < CONNECT_BACKOFF_MS.length; i++) {
     state.connectAttempt = i + 1;
