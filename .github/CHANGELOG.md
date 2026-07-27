@@ -1,5 +1,25 @@
 # Changelog
 
+## 0.1.4 — 2026-07-27
+
+### Added
+
+- The proxy connect path now retries with bounded backoff instead of failing fast at the first readiness miss. A cold start on a memory-constrained box can starve even `/livez` for tens of seconds while the heavy ML model imports, so the previous single-shot probe reported the proxy as dead and left the widget stuck on a stale "starting…" hint for the rest of the session. `connectWithRetry` drives `CONNECT_BACKOFF_MS` (`[5_000, 10_000, 20_000, 40_000, 60_000]`, ~135s total, env-overridable via `OMP_HEADROOM_CONNECT_BACKOFF_MS`), probes `/livez` via a new `getLivez` after each `ensureProxy` spawn, renders the live attempt counter on the widget, and on exhaustion sets a one-shot hint pointing at the manual escape hatch.
+
+- `/headroom reconnect` clears prior exhaustion state and re-enters the connect loop, for cases where the auto loop gave up (e.g. a proxy killed mid-session) and the user wants another attempt without restarting OMP.
+
+### Changed
+
+- `connectWithRetry` accepts a `ConnectRetryOptions` test seam (`probe` / `onRender` / `sleep`); production callers omit it and use the real `ensureProxy` + `getLivez` + `sleep`. Five new tests cover immediate success, retry-then-success, exact exhaustion after `CONNECT_BACKOFF_MS.length` attempts with a single `warning` notification, backoff ordering, and reconnect clearing a stale failure. The suite is now 93 passing across 18 files.
+
+- CI workflows were standardized to 2-space YAML indentation and `bun run` script invocations.
+
+### Removed
+
+- `.omp-plugin/marketplace.json` and the release catalog gate: the marketplace catalog now lives in `DarkPhilosophy/omp-marketplace`, so this repository ships as a plugin only and the README install path points at the marketplace repository. 0.1.0-beta.4 had declared this repository itself a marketplace; that is no longer the case.
+
+- The redundant `VERSION` file and its release gate, in favor of `package.json` as the single source of truth for the version.
+
 ## 0.1.3 — 2026-07-23
 
 ### Fixed
