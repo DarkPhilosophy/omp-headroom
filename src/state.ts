@@ -149,5 +149,7 @@ export function createHeadroomState(): HeadroomState {
     foreignCleared: false,
     sessionId: "",
     rainbowPhase: 0,
+    connectAttempt: 0,
+    connectExhausted: false,
   };
 }

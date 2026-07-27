@@ -75,6 +75,10 @@ export interface HeadroomState {
   foreignCleared: boolean;
   sessionId: string;
   rainbowPhase: number;
+  /** Current attempt index (1-based) of the connect-with-retry loop; 0 = idle. */
+  connectAttempt: number;
+  /** True once the connect loop exhausted all backoff attempts (one-shot warning). */
+  connectExhausted: boolean;
   _debugReqSeq?: number;
 }
 

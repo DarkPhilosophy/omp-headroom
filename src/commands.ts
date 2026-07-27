@@ -29,6 +29,7 @@ export const SUBCOMMANDS: readonly HeadroomSubcommand[] = [
   { label: "start", description: "Start the Headroom proxy" },
   { label: "stop", description: "Stop the Headroom proxy" },
   { label: "restart", description: "Restart the Headroom proxy" },
+  { label: "reconnect", description: "Retry proxy connect with backoff after the auto loop gave up" },
   { label: "update", description: "Check for and install Headroom updates" },
 ];
 

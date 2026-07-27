@@ -39,6 +39,7 @@ import {
   CODE_AWARE,
   COMPRESS_TOOL,
   COMPRESSED_MARKER,
+  CONNECT_BACKOFF_MS,
   DEBUG_SIZING,
   EXTENSION_KEY,
   effectiveSettingValue,
@@ -83,7 +84,7 @@ import {
   responseOutputText,
   systemToText,
 } from "./provider.ts";
-import { isProxyReady, modelUsesHeadroomProxy, proxyPath, proxyPort } from "./proxy.ts";
+import { getLivez, isProxyReady, modelUsesHeadroomProxy, proxyPath, proxyPort } from "./proxy.ts";
 import { pipInstallInvocation, venvInvocation } from "./python-env.ts";
 import { parseServiceAction, renderHeadroomUserService } from "./service.ts";
 import {
@@ -105,6 +106,7 @@ import {
   safeSessionId,
   stableJson,
 } from "./util.ts";
+import type { HeadroomCtx, HeadroomState } from "./types.ts";
 import {
   archiveSavingsPercent,
   cacheUsageLine,
@@ -1603,7 +1605,7 @@ function refreshStatsAndRender(ctx, state) {
   });
 }
 
-async function fetchStats(state, force = false) {
+async function fetchStats(state, force = false, timeoutMs = 3000) {
   const now = Date.now();
   if (!force && state.statsFetchedAt && now - state.statsFetchedAt < STATS_MIN_INTERVAL_MS)
     return state.stats;
@@ -1616,7 +1618,7 @@ async function fetchStats(state, force = false) {
       const project = state.sessionId ? `/p/${state.sessionId}` : "";
       const response = await fetch(proxyPath(`${project}/stats`), {
         method: "GET",
-        signal: AbortSignal.timeout(3000),
+        signal: AbortSignal.timeout(timeoutMs),
       });
       if (!response.ok) return undefined;
       state.stats = await response.json();
@@ -1741,6 +1743,63 @@ async function ensureProxy(ctx, state, waitMs = 0) {
     await sleep(500);
   }
   renderWidget(ctx, state);
+  return false;
+}
+
+/// Connect to the Headroom proxy with bounded retries + backoff. Spawns the
+/// proxy if needed (delegating to `ensureProxy`), then probes `/livez` across
+/// `CONNECT_BACKOFF_MS` attempts so a slow cold-start (heavy ML model import on
+/// a memory-constrained box, where even `/livez` is starved for tens of
+/// seconds) has room to come up instead of failing fast at 25s. On exhaustion
+/// sets a one-shot widget hint pointing at `/headroom reconnect`.
+///
+/// `opts` is a test seam only — production callers omit it so the real
+/// `ensureProxy`, `renderWidget`, and `sleep` are used.
+interface ConnectRetryOptions {
+  /** Override the readiness probe (tests). Production omits → ensureProxy + /livez. */
+  probe?: (ctx: HeadroomCtx, state: HeadroomState, waitMs: number) => Promise<boolean>;
+  /** Override the widget re-render (tests). Production omits → renderWidget. */
+  onRender?: (ctx: HeadroomCtx, state: HeadroomState) => void;
+  /** Override the inter-attempt sleep (tests). Production omits → node sleep. */
+  sleep?: (ms: number) => Promise<void> | void;
+}
+export async function connectWithRetry(
+  ctx: HeadroomCtx,
+  state: HeadroomState,
+  opts: ConnectRetryOptions = {},
+) {
+  const probe = opts.probe ?? ((c, s, ms) => ensureProxy(c, s, ms));
+  const onRender = opts.onRender ?? renderWidget;
+  const sleepMs = opts.sleep ?? ((ms) => sleep(ms));
+  state.connectAttempt = 0;
+  state.connectExhausted = false;
+  state.lastError = "";
+  state.proxyStarting = true;
+  onRender(ctx, state);
+  for (let i = 0; i < CONNECT_BACKOFF_MS.length; i++) {
+    state.connectAttempt = i + 1;
+    onRender(ctx, state);
+    // ensureProxy spawns once (first call) then polls /livez; later calls
+    // reuse the live process and just re-probe. 8s per attempt keeps each
+    // slice short while the backoff between slices spans the warmup window.
+    const ready = await probe(ctx, state, 8_000);
+    if (ready) {
+      state.connectAttempt = 0;
+      state.proxyStarting = false;
+      onRender(ctx, state);
+      return true;
+    }
+    if (i < CONNECT_BACKOFF_MS.length - 1) await sleepMs(CONNECT_BACKOFF_MS[i]);
+  }
+  state.connectAttempt = 0;
+  state.connectExhausted = true;
+  state.proxyStarting = false;
+  state.lastError = "Headroom proxy did not become ready; run /headroom reconnect.";
+  onRender(ctx, state);
+  ctx?.ui?.notify?.(
+    "Headroom proxy did not become ready after retries. Run `/headroom reconnect` to try again.",
+    "warning",
+  );
   return false;
 }
 
@@ -1876,7 +1935,7 @@ export default function headroomExtension(pi: ExtensionAPI) {
     renderWidget(ctx, state);
     void (async () => {
       if (!existsSync(HEADROOM_BIN)) await maintainInstall(ctx, state);
-      await ensureProxy(ctx, state, 25_000);
+      await connectWithRetry(ctx, state);
       await maintainInstall(ctx, state);
       await reconcileProxyVersion(ctx, state);
       // Load accumulated per-project stats immediately so a resumed session
@@ -2421,6 +2480,15 @@ export default function headroomExtension(pi: ExtensionAPI) {
             ? "Headroom proxy restarted."
             : state.lastError || "Headroom proxy is still starting.",
           restarted ? "info" : "warn",
+        );
+      } else if (action === "reconnect") {
+        // Manual escape when the auto connect-loop exhausted its backoff
+        // (cold-start too slow, proxy died mid-session, etc.). Resets the
+        // exhausted flag and retries the full connect-with-retry sequence.
+        const ready = await connectWithRetry(ctx, state);
+        ctx.ui.notify(
+          ready ? "Headroom reconnected." : state.lastError || "Headroom still not ready.",
+          ready ? "info" : "warn",
         );
       } else if (action === "update") {
         state.lastError = "";

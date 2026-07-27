@@ -131,6 +131,11 @@ export const RAINBOW_MS = Number(process.env.OMP_HEADROOM_RAINBOW_MS || 180);
 export const RAINBOW_CODES = [196, 202, 226, 46, 51, 39, 129, 201];
 export const READY_TTL_MS = Number(process.env.OMP_HEADROOM_READY_TTL_MS || 30_000);
 export const STATS_MIN_INTERVAL_MS = Number(process.env.OMP_HEADROOM_STATS_INTERVAL_MS || 2_500);
+/// Backoff schedule (ms) for the proxy connect-with-retry loop. Each entry is
+/// the wait BEFORE the next attempt; total window is the sum (~135s) so a slow
+/// cold-start (heavy ML model load on a small box) has room to warm up before
+/// the widget gives up and points the user at `/headroom reconnect`.
+export const CONNECT_BACKOFF_MS = [5_000, 10_000, 20_000, 40_000, 60_000];
 export const WIDGET_PRIORITY = Number(process.env.OMP_HEADROOM_PRIORITY) || -1050;
 export const COMPRESSED_MARKER = "Retrieve more: hash=";
 export const RETRIEVED_MARKER = "[headroom:retrieved ";

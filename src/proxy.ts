@@ -42,3 +42,48 @@ export async function isProxyReady(proxyUrl = PROXY_URL): Promise<boolean> {
     return false;
   }
 }
+
+export interface LivezStatus {
+  /** Proxy process is up and answering (liveness). */
+  alive: boolean;
+  /** Coarse health label from the proxy (`healthy` | `unhealthy` | ...). */
+  status: string;
+  /** `loop_health.known_failures` — non-zero means the proxy is degraded. */
+  knownFailures: number;
+  /** Proxy uptime in seconds, when reported. */
+  uptimeSeconds?: number;
+}
+
+/**
+ * Richer readiness probe than {@link isProxyReady}: returns the parsed
+ * `/livez` payload so callers can distinguish three states that a boolean
+ * collapses — "proxy dead" (`null`), "alive but unhealthy"
+ * (`alive === true`, `status !== "healthy"`), and "ready"
+ * (`alive && status === "healthy"`). The connect-with-retry loop uses this so
+ * a slow cold-start (proxy blocked on model load, `/livez` itself timing out)
+ * is retried with backoff instead of failing fast.
+ */
+export async function getLivez(proxyUrl = PROXY_URL): Promise<LivezStatus | null> {
+  try {
+    const response = await fetch(proxyPath("/livez", proxyUrl), {
+      method: "GET",
+      signal: AbortSignal.timeout(5_000),
+    });
+    if (!response.ok) return null;
+    const body = (await response.json()) as {
+      alive?: unknown;
+      status?: unknown;
+      uptime_seconds?: unknown;
+      loop_health?: { known_failures?: unknown; status?: unknown } | null;
+    };
+    const loopHealth = body?.loop_health ?? {};
+    return {
+      alive: body?.alive === true,
+      status: String(body?.status ?? loopHealth.status ?? "unknown"),
+      knownFailures: Number(loopHealth.known_failures ?? 0),
+      uptimeSeconds: typeof body?.uptime_seconds === "number" ? body.uptime_seconds : undefined,
+    };
+  } catch {
+    return null;
+  }
+}

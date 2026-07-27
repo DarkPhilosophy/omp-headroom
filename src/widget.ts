@@ -1,6 +1,7 @@
 // Widget rendering: the framed savings box shown next to the editor, the
 // stats/activity lines that fill it, and the `/headroom stats` text summary.
 import {
+  CONNECT_BACKOFF_MS,
   DASHBOARD_URL,
   EXTENSION_KEY,
   PROXY_URL,
@@ -124,8 +125,11 @@ export function renderWidget(ctx: HeadroomCtx, state: HeadroomState): void {
   let problem = "";
   if (!state.enabled) problem = "off";
   else if (state.installState) problem = `${state.installState}…`;
-  else if (state.proxyStarting) problem = "starting…";
-  else if (!state.proxyReady) problem = clip(state.lastError || "offline", 28);
+  else if (state.connectExhausted) problem = "reconnect: /headroom reconnect";
+  else if (state.proxyStarting) {
+    const total = CONNECT_BACKOFF_MS.length;
+    problem = state.connectAttempt ? `connecting ${state.connectAttempt}/${total}…` : "starting…";
+  } else if (!state.proxyReady) problem = clip(state.lastError || "offline", 28);
   const topLeftRaw = `─ Headroom ${problem ? `· ${problem} ` : ""}`;
   const topLeftStyled = `─ ${titleStyled} ${problem ? `${color(state.enabled ? 33 : 90, `· ${problem}`)} ` : ""}`;
   const sid = String(state.sessionId || "").slice(0, 8);
