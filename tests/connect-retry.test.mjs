@@ -1,7 +1,6 @@
 import { describe, expect, test } from "bun:test";
-
-import { connectWithRetry } from "../src/index.ts";
 import { CONNECT_BACKOFF_MS } from "../src/config.ts";
+import { connectWithRetry } from "../src/index.ts";
 
 // Minimal stubs — connectWithRetry only touches these fields on state and
 // ctx.ui.notify. The probe/onRender/sleep seams let us drive the loop without

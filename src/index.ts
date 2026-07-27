@@ -96,6 +96,7 @@ import {
 } from "./session-archive.ts";
 import { createHeadroomState, readForeignTotals, shared, subagentSessionIds } from "./state.ts";
 import { retrieveViaProxy, stringifyRetrieveResult } from "./tools.ts";
+import type { HeadroomCtx, HeadroomState } from "./types.ts";
 import {
   asNumber,
   clip,
@@ -106,7 +107,6 @@ import {
   safeSessionId,
   stableJson,
 } from "./util.ts";
-import type { HeadroomCtx, HeadroomState } from "./types.ts";
 import {
   archiveSavingsPercent,
   cacheUsageLine,
@@ -1768,7 +1768,12 @@ export async function connectWithRetry(
   state: HeadroomState,
   opts: ConnectRetryOptions = {},
 ) {
-  const probe = opts.probe ?? ((c, s, ms) => ensureProxy(c, s, ms));
+  const probe =
+    opts.probe ??
+    (async (c, s, ms) => {
+      await ensureProxy(c, s, ms);
+      return (await getLivez())?.alive === true;
+    });
   const onRender = opts.onRender ?? renderWidget;
   const sleepMs = opts.sleep ?? ((ms) => sleep(ms));
   state.connectAttempt = 0;
