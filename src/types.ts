@@ -65,14 +65,6 @@ export interface HeadroomState {
   sessionArchiveCharsSaved: number;
   headroomCompactActive: boolean;
   lastCompactionCcrHash: string;
-  foreignProvider: number;
-  foreignTool: number;
-  foreignCcr: number;
-  foreignReadAt: number;
-  foreignSelfProvider: number;
-  foreignSelfTool: number;
-  foreignSelfCcr: number;
-  foreignCleared: boolean;
   sessionId: string;
   rainbowPhase: number;
   /** Current attempt index (1-based) of the connect-with-retry loop; 0 = idle. */
