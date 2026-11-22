@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+### Added
+
+- **Real per-session pricing.** The proxy's `$` figures are list-price estimates that fall back to a flat $3/1M for models LiteLLM cannot resolve (e.g. `glm-5.3-flash`, real rate $0.15/1M — ~20× off), so the widget now also shows what the session *actually* costs: OMP bills every assistant turn at the model's real rate (`usage.cost`), the extension accumulates it per session (`real $X · saved $Y (est)` line), and compression savings are re-priced at the session's own blended input rate (cache mix included) instead of the proxy's fallback rate. Proxy list-price numbers stay for comparison; the savings ledger (`~/.headroom/savings_events.jsonl`) and lifetime figure remain proxy-baked and still need a re-derivation migration upstream.
+
 ### Fixed
 
 - `ensureProxy` no longer wedges on a stale `proxyStarting` flag: the systemd-unit wait that times out while the unit is still active now clears the flag, so a unit that later goes inactive can be restarted again. (The same failure was fixed for the spawn path in `4281ae7`; this is the remaining path.)

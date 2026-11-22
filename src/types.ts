@@ -65,6 +65,14 @@ export interface HeadroomState {
   sessionArchiveCharsSaved: number;
   headroomCompactActive: boolean;
   lastCompactionCcrHash: string;
+  /** Real provider-billed dollars for this session (from OMP usage.cost). */
+  realCostUsd: number;
+  /** Input-side tokens seen this session (input + cacheRead + cacheWrite). */
+  realInputTokens: number;
+  /** Real billed input-side dollars for those tokens. */
+  realInputUsd: number;
+  /** Compression savings re-priced at the session's real blended input rate. */
+  realSavedUsd: number;
   sessionId: string;
   rainbowPhase: number;
   /** Current attempt index (1-based) of the connect-with-retry loop; 0 = idle. */

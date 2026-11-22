@@ -97,6 +97,15 @@ export function archiveSavingsPercent(state: HeadroomState): number {
   return before > 0 ? Math.min(100, (saved / before) * 100) : 0;
 }
 
+// Real provider-billed dollars (OMP rates), distinct from the proxy's
+// list-price estimates. Empty until the first billed turn is observed.
+export function realPricingLine(state: HeadroomState): string {
+  const cost = Math.max(0, asNumber(state.realCostUsd));
+  const saved = Math.max(0, asNumber(state.realSavedUsd));
+  if (cost <= 0 && saved <= 0) return "";
+  return `real ${formatUsd(cost)} · saved ${formatUsd(saved)} (est)`;
+}
+
 export function localCompressionLine(state: HeadroomState): string {
   const ps = sessionProxyStats(state);
   const hasArchive = state.sessionArchiveCharsSaved > 0;
@@ -144,6 +153,7 @@ export function renderWidget(ctx: HeadroomCtx, state: HeadroomState): void {
   let botRightRaw = ctxUsd > 0 ? ` ctx ${formatUsd(ctxUsd)} ─` : "";
   let botRightStyled = ctxUsd > 0 ? ` ${color(90, `ctx ${formatUsd(ctxUsd)}`)} ─` : "";
   const ctxLine = ` ${localCompressionLine(state)}`;
+  const realLine = ` ${realPricingLine(state)}`;
   const activityLine = ` ${compactStatsLine(state)}`;
   const cacheLine = ` ${cacheUsageLine(state)}`;
   const updateLine = state.installState
@@ -156,6 +166,7 @@ export function renderWidget(ctx: HeadroomCtx, state: HeadroomState): void {
       topLeftRaw.length + topRightRaw.length + 1,
       botLeftRaw.length + botRightRaw.length + 1,
       ctxLine.length,
+      realLine.length,
       activityLine.length,
       cacheLine.length,
       updateLine.length,
@@ -171,7 +182,9 @@ export function renderWidget(ctx: HeadroomCtx, state: HeadroomState): void {
     botRightRaw = "";
     botRightStyled = "";
   }
-  const rows = [row(ctxLine, inner), row(cacheLine, inner), row(activityLine, inner)];
+  const rows = [row(ctxLine, inner)];
+  if (realLine.trim()) rows.push(row(realLine, inner));
+  rows.push(row(cacheLine, inner), row(activityLine, inner));
   if (updateLine) rows.push(row(updateLine, inner));
   const lines = [
     borderLine(inner, "╭", "╮", topLeftRaw, topLeftStyled, topRightRaw, topRightStyled),
@@ -217,6 +230,9 @@ export function commandSummary(state: HeadroomState): string {
     `Proxy: ${state.proxyReady ? "ready" : state.proxyStarting ? "starting" : "offline"} (${PROXY_URL})`,
     `Version: ${state.version || "unknown"}${isNewer(state.latest, state.version) ? ` (latest ${state.latest} available)` : ""}`,
     `Session (proxy): saved ${formatInt(saved)}${pct ? ` (${formatPct(pct)})` : ""} · req ${formatInt(ps && asNumber(ps.requests) > 0 ? asNumber(ps.requests) : state.providerCompressions)}`,
+    state.realCostUsd > 0 || state.realSavedUsd > 0
+      ? `Session (real, provider rates): ${formatUsd(state.realCostUsd)} billed · ~${formatUsd(state.realSavedUsd)} saved (est)`
+      : `Session (real): no billed usage observed yet`,
     `This process: provider=${formatInt(state.providerCompressions)}, tool=${formatInt(state.toolCompressions)}, ccr=${formatInt(state.ccrHashes)}, archive=${formatInt(state.sessionArchiveCompactions)} (${formatInt(state.sessionArchiveCharsSaved)}ch saved${archivePct ? `, ${formatPct(archivePct)}` : ""})`,
     `Headroom archive: compactions=${formatInt(state.sessionArchiveCompactions)} · source=${formatInt(state.sessionArchiveCharsBefore)}ch · saved=${formatInt(state.sessionArchiveCharsSaved)}ch${archivePct ? ` (${formatPct(archivePct)})` : ""}`,
     `Proxy lifetime (all sessions): ${formatInt(lifeSaved)} tok${asNumber(lifeCost) > 0 ? ` · ${formatUsd(lifeCost)}` : ""}`,

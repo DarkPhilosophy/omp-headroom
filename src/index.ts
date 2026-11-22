@@ -94,6 +94,7 @@ import {
   expandSessionArchiveText,
   type SessionArchiveCandidate,
 } from "./session-archive.ts";
+import { applyRealSavings, applyRealUsage } from "./session-pricing.ts";
 import { createHeadroomState, shared, subagentSessionIds } from "./state.ts";
 import { retrieveViaProxy, stringifyRetrieveResult } from "./tools.ts";
 import type { HeadroomCtx, HeadroomState } from "./types.ts";
@@ -1156,6 +1157,10 @@ async function prepareArchiveSession(ctx, state): Promise<void> {
     state.sessionArchiveCharsSaved = 0;
     state._ompHydrated = false;
     state.ompCompactions = 0;
+    state.realCostUsd = 0;
+    state.realInputTokens = 0;
+    state.realInputUsd = 0;
+    state.realSavedUsd = 0;
   }
   if (state._archiveHydrated) return;
   const totals = await readArchiveTotals(sid);
@@ -1637,6 +1642,9 @@ function recordCompression(state, kind, result, ctx) {
   state.tokensSaved += saved;
   state.tokensBefore += Math.max(0, asNumber(result?.tokensBefore));
   state.tokensAfter += Math.max(0, asNumber(result?.tokensAfter));
+  // Re-price the saved tokens at this session's real blended input rate; the
+  // proxy's tokensSaved dollar figure uses its flat fallback rate.
+  applyRealSavings(state, saved);
   if (kind === "provider") state.providerCompressions += 1;
   if (kind === "tool") state.toolCompressions += 1;
 }
@@ -2002,6 +2010,10 @@ export default function headroomExtension(pi: ExtensionAPI) {
     state.cacheInputTokens += Math.max(0, asNumber(usage?.input));
     state.cacheReadTokens += Math.max(0, asNumber(usage?.cacheRead));
     state.cacheWriteTokens += Math.max(0, asNumber(usage?.cacheWrite));
+    // Real provider-billed dollars for this turn (OMP applies the model's real
+    // rates; the proxy's $ figures are list-price estimates that fall back to
+    // a flat $3/1M for unresolvable models like glm-5.3-flash).
+    applyRealUsage(state, usage);
     renderWidget(ctx, state);
   });
   // Headroom-powered session compaction (hybrid architecture).
