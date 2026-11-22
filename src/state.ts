@@ -64,6 +64,7 @@ export function createHeadroomState(): HeadroomState {
     realInputTokens: 0,
     realInputUsd: 0,
     realSavedUsd: 0,
+    sessionCacheReadRate: 0,
     sessionId: "",
     rainbowPhase: 0,
     connectAttempt: 0,

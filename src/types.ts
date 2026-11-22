@@ -73,6 +73,8 @@ export interface HeadroomState {
   realInputUsd: number;
   /** Compression savings re-priced at the session's real blended input rate. */
   realSavedUsd: number;
+  /** Live session model's real cache-read rate in $/token (from ctx.model.cost). */
+  sessionCacheReadRate: number;
   sessionId: string;
   rainbowPhase: number;
   /** Current attempt index (1-based) of the connect-with-retry loop; 0 = idle. */

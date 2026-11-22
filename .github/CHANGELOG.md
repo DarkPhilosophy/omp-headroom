@@ -4,7 +4,7 @@
 
 ### Added
 
-- **Real per-session pricing.** The proxy's `$` figures are list-price estimates that fall back to a flat $3/1M for models LiteLLM cannot resolve (e.g. `glm-5.3-flash`, real rate $0.15/1M — ~20× off), so the widget now also shows what the session *actually* costs: OMP bills every assistant turn at the model's real rate (`usage.cost`), the extension accumulates it per session (`real $X · saved $Y (est)` line), and compression savings are re-priced at the session's own blended input rate (cache mix included) instead of the proxy's fallback rate. Proxy list-price numbers stay for comparison; the savings ledger (`~/.headroom/savings_events.jsonl`) and lifetime figure remain proxy-baked and still need a re-derivation migration upstream.
+- **Real pricing, recalculated in the plugin.** The proxy's `$` figures are list-price estimates that fall back to a flat $3/1M for models LiteLLM cannot resolve (e.g. `glm-5.3-flash`, real rate $0.15/1M — ~165× off on the lifetime figure). The widget now displays only real dollars, re-derived in the plugin from OMP's own model rates (the same catalog that bills `usage.cost`): session billed $ accumulates from `message_end` and hydrates from the session transcript on restart; session saved $ re-prices the proxy's exact per-session `tokens_saved` at the model's real cache-read rate; lifetime $ re-derives `~/.headroom/savings_events.jsonl` per event at real per-model rates (60s cache, unpriced models counted in tokens only). Proxy estimates remain visible in `/headroom stats`, explicitly labeled as flat-fallback-rate guesses.
 
 ### Fixed
 

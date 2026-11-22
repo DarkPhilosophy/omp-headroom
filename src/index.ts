@@ -94,7 +94,11 @@ import {
   expandSessionArchiveText,
   type SessionArchiveCandidate,
 } from "./session-archive.ts";
-import { applyRealSavings, applyRealUsage } from "./session-pricing.ts";
+import {
+  applyRealUsage,
+  hydrateRealUsageFromTranscript,
+  sessionInputRate,
+} from "./session-pricing.ts";
 import { createHeadroomState, shared, subagentSessionIds } from "./state.ts";
 import { retrieveViaProxy, stringifyRetrieveResult } from "./tools.ts";
 import type { HeadroomCtx, HeadroomState } from "./types.ts";
@@ -1642,9 +1646,9 @@ function recordCompression(state, kind, result, ctx) {
   state.tokensSaved += saved;
   state.tokensBefore += Math.max(0, asNumber(result?.tokensBefore));
   state.tokensAfter += Math.max(0, asNumber(result?.tokensAfter));
-  // Re-price the saved tokens at this session's real blended input rate; the
-  // proxy's tokensSaved dollar figure uses its flat fallback rate.
-  applyRealSavings(state, saved);
+  // Re-price saved tokens at the session's real rate; the proxy's own $ bakes
+  // its flat fallback rate. Removed content is stable prefix — cache-read zone.
+  state.realSavedUsd += saved * sessionInputRate(state);
   if (kind === "provider") state.providerCompressions += 1;
   if (kind === "tool") state.toolCompressions += 1;
 }
@@ -1959,6 +1963,16 @@ export default function headroomExtension(pi: ExtensionAPI) {
     // OMP sessions don't pollute each other's widget data.
     const sid = ctx?.sessionManager?.getSessionId?.();
     await prepareArchiveSession(ctx, state);
+    // Capture the live model's real rates (per token) — the same rates OMP
+    // bills usage.cost with. Used to re-price every $ the widget shows.
+    const modelCost = ctx?.model?.cost;
+    if (modelCost) {
+      const cacheRead = asNumber(modelCost.cacheRead);
+      if (cacheRead > 0) state.sessionCacheReadRate = cacheRead / 1_000_000;
+    }
+    // Real billed $ is in-memory; rehydrate the session's full history from
+    // its transcript so a restart shows the true session total immediately.
+    await hydrateRealUsageFromTranscript(state, ctx?.sessionManager?.getSessionFile?.());
     // CRITICAL: only the main UI session (hasUI===true) may capture latestCtx.
     if (isMainSession(ctx)) {
       latestCtx = ctx;
@@ -2014,6 +2028,8 @@ export default function headroomExtension(pi: ExtensionAPI) {
     // rates; the proxy's $ figures are list-price estimates that fall back to
     // a flat $3/1M for unresolvable models like glm-5.3-flash).
     applyRealUsage(state, usage);
+    const modelCacheRead = asNumber(ctx?.model?.cost?.cacheRead);
+    if (modelCacheRead > 0) state.sessionCacheReadRate = modelCacheRead / 1_000_000;
     renderWidget(ctx, state);
   });
   // Headroom-powered session compaction (hybrid architecture).
