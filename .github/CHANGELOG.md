@@ -1,5 +1,23 @@
 # Changelog
 
+## Unreleased
+
+### Fixed
+
+- `ensureProxy` no longer wedges on a stale `proxyStarting` flag: the systemd-unit wait that times out while the unit is still active now clears the flag, so a unit that later goes inactive can be restarted again. (The same failure was fixed for the spawn path in `4281ae7`; this is the remaining path.)
+- `responsesBatchChunks` now carries a below-floor chunk into the next batch instead of discarding it: with defaults, 8–11 outputs of ~1,100–1,400 chars form a capped chunk that sums below the 12,000-char floor while the full run clears it, and the pre-fix code silently never compressed any of them. A regression test pins the carry behavior.
+- `/headroom update` no longer reports "(up to date)" when the PyPI check failed (e.g. offline): the maintenance run now reports whether `state.latest` is known fresh, and the command warns instead. The "updating…" auto-clear timer was also raised from 45s to 45 minutes so it cannot clear the indicator mid-install.
+- `restartProxy` now polls until the killed process stops answering `/livez` (bounded 2s) instead of a fixed 500ms sleep, which could report success while the old binary still held the port.
+- `reconcileProxyVersion` now guards the orphan-restart branch with the once-per-mismatch key (like the systemd branch) and visibly warns when the restart is refused, instead of silently keeping the stale proxy: previously `restartProxy`'s unowned-proxy guard made the orphan restart an unreachable no-op while the old version kept serving.
+- The update-lock stale/self-steal path re-acquires exclusively with `wx`, closing a race where two processes judging the same lock stale could both run concurrent updates.
+- `systemdUnitAvailable` and `canUseUv` now cache only positive probe results: a transient `systemctl cat`/`uv --version` failure no longer disables systemd paths or pins the process to pip for its whole lifetime.
+
+### Removed
+
+- The dead foreign-file IPC (`writeForeignSelf`, `clearForeignFiles`, `readForeignTotals`, and the `foreignSelf*`/`foreignReadAt` state fields): no writer was ever wired up, so the per-process JSON files were never populated and the reads always yielded zeros. Subagent (+N) totals are carried by the process-shared counters, which are the actual OMP in-process channel.
+
+- The write-only `_failures` counter in `compressResponsesPayload`.
+
 ## 0.1.4 — 2026-07-27
 
 ### Added
