@@ -199,7 +199,15 @@ export function createSessionCompaction(
   const liveMessages = Math.max(1, Number(options.liveMessages ?? SESSION_LIVE_MESSAGES));
   const cut = safeSessionCut(body, Math.max(0, body.length - liveMessages));
   if (cut <= 0) return passThrough(messages, "no_safe_prefix");
-  for (let index = cut; index < body.length; index++) {
+  // Scan the FULL body for an existing archive marker, not just the live tail:
+  // the previous request's marker sits at the start of the body (inside the
+  // prefix, before `cut`), so a tail-only scan misses it and re-archives every
+  // request, rewriting the outbound prefix and destroying the provider's
+  // byte-prefix cache (github.com/DarkPhilosophy/omp-headroom/issues/2).
+  // Trade-off: archives fire at most once per session — later stable content
+  // is no longer folded into chained archives; chain expansion stays supported
+  // for legacy sessions.
+  for (let index = 0; index < body.length; index++) {
     if (messageHasSessionArchive(body[index])) return passThrough(messages, "existing_archive");
   }
 

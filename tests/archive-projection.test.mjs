@@ -1,3 +1,4 @@
+import "./helpers/enable-archive.mjs";
 import { describe, expect, test } from "bun:test";
 import { spawnSync } from "node:child_process";
 import { mkdtempSync, rmSync } from "node:fs";
@@ -226,7 +227,7 @@ describe("archive boundary safety", () => {
     expect(liveOutputIds.has("c2")).toBe(true);
   });
 
-  test("expands a re-compacted archive chain through its CCR ancestor", () => {
+  test("never re-fires when an archive marker exists anywhere in the body (issue #2)", () => {
     const first = createSessionCompaction(
       [
         { role: "system", content: "rules" },
@@ -241,6 +242,9 @@ describe("archive boundary safety", () => {
 
     const firstMarker = archiveMessage(first.messages);
     expect(firstMarker).toBeDefined();
+    // The marker sits at the start of the body, far outside the live tail —
+    // archiving must NOT fire again: each re-fire rewrites the outbound
+    // prefix and busts the provider's byte-prefix cache.
     const second = createSessionCompaction(
       [
         { role: "system", content: "rules" },
@@ -252,9 +256,27 @@ describe("archive boundary safety", () => {
       ],
       explicitOptions,
     );
-    expect(second.compacted).toBe(true);
+    expect(second.compacted).toBe(false);
+    expect(second.reason).toBe("existing_archive");
+  });
 
-    const expanded = expandSessionArchiveText(second.originalText, (hash) =>
+  test("expands archived text through its CCR ancestor chain (legacy sessions)", () => {
+    const first = createSessionCompaction(
+      [
+        { role: "system", content: "rules" },
+        { role: "user", content: "first generation ".repeat(800) },
+        { role: "assistant", content: "first answer ".repeat(800) },
+        { role: "user", content: "live question" },
+        { role: "assistant", content: "live answer" },
+      ],
+      explicitOptions,
+    );
+    expect(first.compacted).toBe(true);
+
+    const firstMarker = archiveMessage(first.messages);
+    expect(firstMarker).toBeDefined();
+    const legacyChainedText = JSON.stringify([{ role: "user", content: firstMarker.content }]);
+    const expanded = expandSessionArchiveText(legacyChainedText, (hash) =>
       hash === first.hash ? first.originalText : "",
     );
     expect(expanded).toContain("first generation first generation");

@@ -8,6 +8,7 @@ import {
   WIDGET_PLACEMENT,
   WIDGET_PRIORITY,
 } from "./config.ts";
+import { realLedgerTotals, sessionInputRate } from "./session-pricing.ts";
 import { shared, subagentSessionIds } from "./state.ts";
 import type { HeadroomCtx, HeadroomState, ProxyProjectStats } from "./types.ts";
 import {
@@ -97,6 +98,30 @@ export function archiveSavingsPercent(state: HeadroomState): number {
   return before > 0 ? Math.min(100, (saved / before) * 100) : 0;
 }
 
+// Real provider-billed dollars (OMP rates), distinct from the proxy's
+// list-price estimates. Empty until the first billed turn is observed.
+export function realPricingLine(state: HeadroomState): string {
+  const cost = Math.max(0, asNumber(state.realCostUsd));
+  const saved = Math.max(0, asNumber(state.realSavedUsd));
+  if (cost <= 0 && saved <= 0) return "";
+  return `real ${formatUsd(cost)} · saved ${formatUsd(saved)} (est)`;
+}
+
+// Session savings re-priced at the model's real cache-read rate: the proxy's
+// per-session tokens_saved are exact, its dollars are the flat-fallback fiction.
+export function sessionSavedUsdReal(state: HeadroomState): number {
+  const ps = sessionProxyStats(state);
+  const tokens = Math.max(0, asNumber(ps?.tokens_saved));
+  if (tokens <= 0) return 0;
+  return tokens * sessionInputRate(state);
+}
+
+// Lifetime savings re-derived from the durable ledger at real per-model rates.
+export function lifetimeSavedUsdReal(state: HeadroomState): number {
+  void state;
+  return realLedgerTotals().usd;
+}
+
 export function localCompressionLine(state: HeadroomState): string {
   const ps = sessionProxyStats(state);
   const hasArchive = state.sessionArchiveCharsSaved > 0;
@@ -136,14 +161,15 @@ export function renderWidget(ctx: HeadroomCtx, state: HeadroomState): void {
   let topRightRaw = sid ? ` ${sid} ─` : "";
   let topRightStyled = sid ? ` ${color(90, sid)} ─` : "";
   const ps = sessionProxyStats(state);
-  const sessionUsd = asNumber(ps?.compression_savings_usd);
-  const lifeUsd = proxyLifetimeUsd(state);
-  const ctxUsd = asNumber(ps?.total_input_cost_usd);
+  const sessionUsd = Math.max(0, asNumber(state.realSavedUsd)) || sessionSavedUsdReal(state);
+  const lifeUsd = lifetimeSavedUsdReal(state);
+  const ctxUsd = Math.max(0, asNumber(state.realCostUsd));
   const botLeftRaw = `─ ${formatUsd(sessionUsd)} · ${formatUsd(lifeUsd)} `;
   const botLeftStyled = `─ ${color(32, formatUsd(sessionUsd))}${color(90, ` · ${formatUsd(lifeUsd)}`)} `;
   let botRightRaw = ctxUsd > 0 ? ` ctx ${formatUsd(ctxUsd)} ─` : "";
   let botRightStyled = ctxUsd > 0 ? ` ${color(90, `ctx ${formatUsd(ctxUsd)}`)} ─` : "";
   const ctxLine = ` ${localCompressionLine(state)}`;
+  const realLine = ` ${realPricingLine(state)}`;
   const activityLine = ` ${compactStatsLine(state)}`;
   const cacheLine = ` ${cacheUsageLine(state)}`;
   const updateLine = state.installState
@@ -156,6 +182,7 @@ export function renderWidget(ctx: HeadroomCtx, state: HeadroomState): void {
       topLeftRaw.length + topRightRaw.length + 1,
       botLeftRaw.length + botRightRaw.length + 1,
       ctxLine.length,
+      realLine.length,
       activityLine.length,
       cacheLine.length,
       updateLine.length,
@@ -171,7 +198,9 @@ export function renderWidget(ctx: HeadroomCtx, state: HeadroomState): void {
     botRightRaw = "";
     botRightStyled = "";
   }
-  const rows = [row(ctxLine, inner), row(cacheLine, inner), row(activityLine, inner)];
+  const rows = [row(ctxLine, inner)];
+  if (realLine.trim()) rows.push(row(realLine, inner));
+  rows.push(row(cacheLine, inner), row(activityLine, inner));
   if (updateLine) rows.push(row(updateLine, inner));
   const lines = [
     borderLine(inner, "╭", "╮", topLeftRaw, topLeftStyled, topRightRaw, topRightStyled),
@@ -217,9 +246,10 @@ export function commandSummary(state: HeadroomState): string {
     `Proxy: ${state.proxyReady ? "ready" : state.proxyStarting ? "starting" : "offline"} (${PROXY_URL})`,
     `Version: ${state.version || "unknown"}${isNewer(state.latest, state.version) ? ` (latest ${state.latest} available)` : ""}`,
     `Session (proxy): saved ${formatInt(saved)}${pct ? ` (${formatPct(pct)})` : ""} · req ${formatInt(ps && asNumber(ps.requests) > 0 ? asNumber(ps.requests) : state.providerCompressions)}`,
+    `Session (real, provider rates): ${formatUsd(state.realCostUsd)} billed · ~${formatUsd(Math.max(0, asNumber(state.realSavedUsd)) || sessionSavedUsdReal(state))} saved (cache-rate est)`,
     `This process: provider=${formatInt(state.providerCompressions)}, tool=${formatInt(state.toolCompressions)}, ccr=${formatInt(state.ccrHashes)}, archive=${formatInt(state.sessionArchiveCompactions)} (${formatInt(state.sessionArchiveCharsSaved)}ch saved${archivePct ? `, ${formatPct(archivePct)}` : ""})`,
     `Headroom archive: compactions=${formatInt(state.sessionArchiveCompactions)} · source=${formatInt(state.sessionArchiveCharsBefore)}ch · saved=${formatInt(state.sessionArchiveCharsSaved)}ch${archivePct ? ` (${formatPct(archivePct)})` : ""}`,
-    `Proxy lifetime (all sessions): ${formatInt(lifeSaved)} tok${asNumber(lifeCost) > 0 ? ` · ${formatUsd(lifeCost)}` : ""}`,
+    `Proxy lifetime (all sessions): ${formatInt(lifeSaved)} tok · ~${formatUsd(lifetimeSavedUsdReal(state))} (real, re-derived)${asNumber(lifeCost) > 0 ? ` [proxy est ${formatUsd(lifeCost)} — flat-fallback rate]` : ""}`,
   ];
   const mcp = stats?.summary?.mcp;
   if (mcp) {

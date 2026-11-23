@@ -1,0 +1,4 @@
+# Test isolation: force session archiving on before config.ts module-init
+# reads host config (~/.omp/agent/headroom.yml may disable it).
+[test]
+preload = ["./tests/helpers/enable-archive.mjs"]

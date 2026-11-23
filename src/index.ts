@@ -94,7 +94,12 @@ import {
   expandSessionArchiveText,
   type SessionArchiveCandidate,
 } from "./session-archive.ts";
-import { createHeadroomState, readForeignTotals, shared, subagentSessionIds } from "./state.ts";
+import {
+  applyRealUsage,
+  hydrateRealUsageFromTranscript,
+  sessionInputRate,
+} from "./session-pricing.ts";
+import { createHeadroomState, shared, subagentSessionIds } from "./state.ts";
 import { retrieveViaProxy, stringifyRetrieveResult } from "./tools.ts";
 import type { HeadroomCtx, HeadroomState } from "./types.ts";
 import {
@@ -180,9 +185,10 @@ function run(command: string, args: string[], timeoutMs: number): Promise<Comman
 }
 
 async function canUseUv() {
-  if (uvAvailable === undefined) {
-    uvAvailable = (await run(uvBin(), ["--version"], 10_000)).code === 0;
-  }
+  // Only cache the positive result: a transient failure at first use would
+  // otherwise pin this process to pip for its whole lifetime.
+  if (uvAvailable) return true;
+  uvAvailable = (await run(uvBin(), ["--version"], 10_000)).code === 0;
   return uvAvailable;
 }
 
@@ -213,11 +219,12 @@ let systemdUnitKnown: boolean | undefined;
 
 async function systemdUnitAvailable() {
   if (!SYSTEMD_UNIT) return false;
-  if (systemdUnitKnown === undefined) {
-    const result = await run("systemctl", ["--user", "cat", SYSTEMD_UNIT], 5_000);
-
-    systemdUnitKnown = result.code === 0;
-  }
+  // Only cache the positive result: a transient `systemctl cat` failure
+  // (heavy load, slow start) must not disable all systemd paths for the
+  // rest of the process lifetime.
+  if (systemdUnitKnown) return true;
+  const result = await run("systemctl", ["--user", "cat", SYSTEMD_UNIT], 5_000);
+  systemdUnitKnown = result.code === 0;
   return systemdUnitKnown;
 }
 
@@ -331,7 +338,13 @@ async function restartProxy(ctx, state) {
   if (ownedProcess) {
     ownedProcess.kill("SIGTERM");
     state.proxyProcess = undefined;
-    await sleep(500);
+    // A fixed sleep races a slow-dying proxy: as long as it still answers
+    // /livez, ensureProxy would mistake it for the restarted one. Poll
+    // (bounded) until it actually stops responding.
+    const deadline = Date.now() + 2_000;
+    while (Date.now() < deadline && (await isProxyReady())) {
+      await sleep(100);
+    }
   }
   if (await systemdUnitAvailable()) {
     const result = await systemdCtl("restart");
@@ -389,6 +402,22 @@ function writeUpdateStamp(stamp) {
   }
 }
 
+// Steal a lock we own or judge stale, then re-acquire exclusively: a plain
+// overwrite lets two processes that both find the lock stale both proceed.
+function stealUpdateLock(): boolean {
+  try {
+    unlinkSync(UPDATE_LOCK_FILE);
+  } catch {
+    return false;
+  }
+  try {
+    writeFileSync(UPDATE_LOCK_FILE, String(process.pid), { flag: "wx" });
+    return true;
+  } catch {
+    return false;
+  }
+}
+
 function acquireUpdateLock() {
   try {
     writeFileSync(UPDATE_LOCK_FILE, String(process.pid), { flag: "wx" });
@@ -400,14 +429,10 @@ function acquireUpdateLock() {
       // releasing (e.g. unhandled rejection bypassing finally).
       // Safe to reclaim — no other update can be in flight.
       const lockPid = readFileSync(UPDATE_LOCK_FILE, "utf8").trim();
-      if (lockPid === String(process.pid)) {
-        writeFileSync(UPDATE_LOCK_FILE, String(process.pid));
-        return true;
-      }
+      if (lockPid === String(process.pid)) return stealUpdateLock();
       // Stale after 45 min (previous OMP session crashed mid-update).
       if (Date.now() - statSync(UPDATE_LOCK_FILE).mtimeMs > 45 * 60_000) {
-        writeFileSync(UPDATE_LOCK_FILE, String(process.pid));
-        return true;
+        return stealUpdateLock();
       }
     } catch {
       // Lock vanished mid-check; do not race for it.
@@ -424,7 +449,7 @@ function releaseUpdateLock() {
   }
 }
 
-let maintenanceInFlight: Promise<void> | undefined;
+let maintenanceInFlight: Promise<{ checked: boolean }> | undefined;
 
 // ROCm torch survival: a `headroom` upgrade pulls torch from the default (CUDA)
 // PyPI index, which silently replaces the ROCm build and breaks GPU kompress
@@ -482,9 +507,13 @@ function maintainInstall(ctx, state, force = false) {
 }
 
 async function doMaintainInstall(ctx, state, force) {
+  // True once `state.latest` is known fresh this run (stamp within interval,
+  // successful PyPI fetch, or a just-completed install/update). Callers use
+  // it to avoid claiming "up to date" when the check never happened.
+  let checked = false;
   try {
     if (!existsSync(HEADROOM_BIN)) {
-      if (!acquireUpdateLock()) return;
+      if (!acquireUpdateLock()) return { checked };
       try {
         state.installState = "installing";
         renderWidget(ctx, state);
@@ -510,30 +539,35 @@ async function doMaintainInstall(ctx, state, force) {
         state.installState = "";
         state.version = await installedVersion();
         writeUpdateStamp({ checkedAt: Date.now(), latest: state.version });
+        checked = true;
         ctx?.ui?.notify?.(`Headroom ${state.version} installed.`, "info");
       } finally {
         releaseUpdateLock();
       }
-      return;
+      return { checked };
     }
 
     // AUTOUPDATE only disables the daily update poll. First-time provisioning
     // above must always run: a missing venv is a broken install, not an update.
-    if (!AUTOUPDATE && !force) return;
+    if (!AUTOUPDATE && !force) return { checked };
     if (!state.version) state.version = await installedVersion();
     const stamp = readUpdateStamp();
     if (!force && stamp.checkedAt && Date.now() - stamp.checkedAt < UPDATE_INTERVAL_MS) {
-      if (typeof stamp.latest === "string" && stamp.latest) state.latest = stamp.latest;
+      if (typeof stamp.latest === "string" && stamp.latest) {
+        state.latest = stamp.latest;
+        checked = true;
+      }
     } else {
       const latest = await latestPypiVersion();
       if (latest) {
         state.latest = latest;
+        checked = true;
         writeUpdateStamp({ checkedAt: Date.now(), latest });
       }
     }
-    if (!isNewer(state.latest, state.version)) return;
+    if (!isNewer(state.latest, state.version)) return { checked };
 
-    if (!acquireUpdateLock()) return;
+    if (!acquireUpdateLock()) return { checked };
     try {
       const wasRocm = (await isRocmVenv()) || detectAmdGpu();
       state.installState = "updating";
@@ -544,6 +578,7 @@ async function doMaintainInstall(ctx, state, force) {
       state.installState = "";
       state.version = await installedVersion();
       writeUpdateStamp({ checkedAt: Date.now(), latest: state.version });
+      checked = true;
       if (wasRocm) await repinRocmTorch();
       const restarted = await restartProxy(ctx, state);
       ctx?.ui?.notify?.(
@@ -555,9 +590,11 @@ async function doMaintainInstall(ctx, state, force) {
     } finally {
       releaseUpdateLock();
     }
+    return { checked };
   } catch (error) {
     state.installState = "";
     state.lastError = errorMessage(error);
+    return { checked: false };
   } finally {
     renderWidget(ctx, state);
   }
@@ -615,13 +652,25 @@ async function reconcileProxyVersion(ctx, state) {
       return;
     }
     // An older proxy (often orphaned by a previous session) is still serving;
-    // restart it so the upgraded install actually takes effect.
+    // restart it so the upgraded install actually takes effect. Notify ONCE
+    // per unique mismatch, and make a refusal visible: restartProxy never
+    // kills an unowned shared proxy, so without this the stale version
+    // silently keeps serving (state.lastError is hidden while ready).
+    const key = `${liveVersion}|${state.version}`;
+    if (state.reconcileKey === key) return;
+    state.reconcileKey = key;
     const restarted = await restartProxy(ctx, state);
-    if (restarted)
+    if (restarted) {
       ctx?.ui?.notify?.(
         `Headroom proxy restarted on ${state.version} (was ${liveVersion}).`,
         "info",
       );
+    } else {
+      ctx?.ui?.notify?.(
+        `Headroom proxy is still ${liveVersion} but ${state.version} is installed; restart it to activate the update (it is owned by another process and is never stopped automatically).`,
+        "warn",
+      );
+    }
   } catch {
     // Best effort.
   }
@@ -1112,6 +1161,10 @@ async function prepareArchiveSession(ctx, state): Promise<void> {
     state.sessionArchiveCharsSaved = 0;
     state._ompHydrated = false;
     state.ompCompactions = 0;
+    state.realCostUsd = 0;
+    state.realInputTokens = 0;
+    state.realInputUsd = 0;
+    state.realSavedUsd = 0;
   }
   if (state._archiveHydrated) return;
   const totals = await readArchiveTotals(sid);
@@ -1362,9 +1415,12 @@ function responsesBatchChunks(input, minToolChars) {
   let chunk: Array<{ index: number; item: Record<string, unknown>; output: string }> = [];
   let chunkChars = 0;
   const flush = () => {
-    if (chunkChars >= minToolChars) chunks.push(chunk);
     chunk = [];
     chunkChars = 0;
+  };
+  const pushChunk = () => {
+    if (chunkChars >= minToolChars) chunks.push(chunk);
+    flush();
   };
   for (let index = 0; index < input.length; index++) {
     const item = input[index];
@@ -1379,16 +1435,22 @@ function responsesBatchChunks(input, minToolChars) {
     ) {
       continue;
     }
+    // A capacity flush below the floor must carry its items into the next
+    // chunk, not discard them: capped at 8 items of ~1,400 chars each, a
+    // chunk can sum below the floor while the full run clears it, and the
+    // dropped items could never be compressed afterwards.
     if (
-      chunk.length >= RESPONSES_BATCH_MAX_ITEMS ||
-      (chunk.length > 0 && chunkChars + output.length > RESPONSES_BATCH_MAX_CHARS)
+      (chunk.length >= RESPONSES_BATCH_MAX_ITEMS ||
+        (chunk.length > 0 && chunkChars + output.length > RESPONSES_BATCH_MAX_CHARS)) &&
+      chunkChars >= minToolChars
     ) {
-      flush();
+      pushChunk();
     }
     chunk.push({ index, item, output });
     chunkChars += output.length;
   }
-  flush();
+  // Final tail: only worth a proxy call when it cleared the floor.
+  pushChunk();
   return chunks;
 }
 
@@ -1477,8 +1539,6 @@ export async function compressResponsesPayload(
   if (!providerReady) return workingPayload;
   // Batch individually-small outputs when their aggregate clears the adaptive
   // floor, then compress oversized outputs concurrently with bounded workers.
-  // Input order and unchanged object identity are preserved.
-  let _failures = 0;
   const minToolChars = adaptiveMinChars(MIN_TOOL_TEXT_CHARS, contextUsageRatio(ctx));
   const nextInput: unknown[] = [...input];
   for (const batchEntries of responsesBatchChunks(input, minToolChars)) {
@@ -1490,7 +1550,6 @@ export async function compressResponsesPayload(
       changed = true;
     } catch {
       // Batch failure is fail-open; oversized outputs still run independently.
-      _failures += 1;
     }
   }
   const compressItem = async (item) => {
@@ -1538,7 +1597,6 @@ export async function compressResponsesPayload(
       }
     } catch {
       // A failed item keeps its original output; other items still compress.
-      _failures += 1;
     }
     return { item };
   };
@@ -1577,9 +1635,9 @@ function recordCompression(state, kind, result, ctx) {
   const saved = Math.max(0, asNumber(result?.tokensSaved));
   if (saved <= 0) return;
   // hasUI=false → subagent or pre-initialize main. Use MODULE-LEVEL counters
-  // (not state.foreignSelf*) because the factory creates a separate state per
-  // call, but Bun caches the module — so _sharedForeign* is visible to both
-  // the main's compactStatsLine and the subagent's recordCompression.
+  // (not per-state fields) because the factory creates a separate state per
+  // call, but Bun caches the module — so the `shared` counters are visible to
+  // both the main's compactStatsLine and the subagent's recordCompression.
   if (ctx && !isMainSession(ctx)) {
     if (kind === "provider") shared.foreignProvider += 1;
     if (kind === "tool") shared.foreignTool += 1;
@@ -1588,6 +1646,9 @@ function recordCompression(state, kind, result, ctx) {
   state.tokensSaved += saved;
   state.tokensBefore += Math.max(0, asNumber(result?.tokensBefore));
   state.tokensAfter += Math.max(0, asNumber(result?.tokensAfter));
+  // Re-price saved tokens at the session's real rate; the proxy's own $ bakes
+  // its flat fallback rate. Removed content is stable prefix — cache-read zone.
+  state.realSavedUsd += saved * sessionInputRate(state);
   if (kind === "provider") state.providerCompressions += 1;
   if (kind === "tool") state.toolCompressions += 1;
 }
@@ -1627,15 +1688,6 @@ async function fetchStats(state, force = false, timeoutMs = 3000) {
       state.proxyStarting = false;
       state.proxyCheckedAt = state.statsFetchedAt;
       state.lastError = "";
-      // Also refresh subagent (+N) totals from foreign files — this runs after
-      // every compression event on the main session, so (+N) updates promptly
-      // even if the rainbow timer's read is delayed or blocked.
-      try {
-        const t = readForeignTotals();
-        state.foreignProvider = t.provider;
-        state.foreignTool = t.tool;
-        state.foreignCcr = t.ccr;
-      } catch {}
       return state.stats;
     } catch (error) {
       state.lastError = `Headroom stats unavailable: ${error instanceof Error ? error.message : String(error)}`;
@@ -1677,6 +1729,10 @@ async function ensureProxy(ctx, state, waitMs = 0) {
       }
       await sleep(500);
     }
+    // Timeout: clear the starting flag, or a later inactive unit can never
+    // be restarted again — the spawn/start gate below is blocked by the
+    // stale `proxyStarting` (same failure as the pre-set removed earlier).
+    state.proxyStarting = false;
     renderWidget(ctx, state);
     return false;
   }
@@ -1833,23 +1889,6 @@ export default function headroomExtension(pi: ExtensionAPI) {
         state.rainbowPhase = (state.rainbowPhase + 1) % RAINBOW_CODES.length;
         dirty = true;
       }
-      // Main UI session: refresh aggregated subagent (+N) totals ~1/s. This is
-      // LOCAL file I/O and must NOT be gated on proxyReady — otherwise a busy
-      // or briefly-unreachable proxy would freeze the subagent counters.
-      if (isMainUi && now - (state.foreignReadAt || 0) > 1_000) {
-        state.foreignReadAt = now;
-        const t = readForeignTotals();
-        if (
-          t.provider !== state.foreignProvider ||
-          t.tool !== state.foreignTool ||
-          t.ccr !== state.foreignCcr
-        ) {
-          state.foreignProvider = t.provider;
-          state.foreignTool = t.tool;
-          state.foreignCcr = t.ccr;
-          dirty = true;
-        }
-      }
       // Periodically re-fetch proxy stats so the widget's ctx/req line stays
       // live even when the extension's own hooks aren't firing (e.g. proxy
       // compresses at transport level without the hook recording it).
@@ -1875,7 +1914,7 @@ export default function headroomExtension(pi: ExtensionAPI) {
 
   const state = createHeadroomState();
 
-  // Capture the main UI session's render target + clear foreign files exactly once.
+  // Capture the main UI session's render target exactly once.
   // session_start may fire BEFORE OMP wires the UI (hasUI=false then), so we also
   // call this from the active hooks, where the main session's ctx has hasUI=true.
   function ensureMainCaptured(ctx) {
@@ -1924,6 +1963,16 @@ export default function headroomExtension(pi: ExtensionAPI) {
     // OMP sessions don't pollute each other's widget data.
     const sid = ctx?.sessionManager?.getSessionId?.();
     await prepareArchiveSession(ctx, state);
+    // Capture the live model's real rates (per token) — the same rates OMP
+    // bills usage.cost with. Used to re-price every $ the widget shows.
+    const modelCost = ctx?.model?.cost;
+    if (modelCost) {
+      const cacheRead = asNumber(modelCost.cacheRead);
+      if (cacheRead > 0) state.sessionCacheReadRate = cacheRead / 1_000_000;
+    }
+    // Real billed $ is in-memory; rehydrate the session's full history from
+    // its transcript so a restart shows the true session total immediately.
+    await hydrateRealUsageFromTranscript(state, ctx?.sessionManager?.getSessionFile?.());
     // CRITICAL: only the main UI session (hasUI===true) may capture latestCtx.
     if (isMainSession(ctx)) {
       latestCtx = ctx;
@@ -1975,6 +2024,12 @@ export default function headroomExtension(pi: ExtensionAPI) {
     state.cacheInputTokens += Math.max(0, asNumber(usage?.input));
     state.cacheReadTokens += Math.max(0, asNumber(usage?.cacheRead));
     state.cacheWriteTokens += Math.max(0, asNumber(usage?.cacheWrite));
+    // Real provider-billed dollars for this turn (OMP applies the model's real
+    // rates; the proxy's $ figures are list-price estimates that fall back to
+    // a flat $3/1M for unresolvable models like glm-5.3-flash).
+    applyRealUsage(state, usage);
+    const modelCacheRead = asNumber(ctx?.model?.cost?.cacheRead);
+    if (modelCacheRead > 0) state.sessionCacheReadRate = modelCacheRead / 1_000_000;
     renderWidget(ctx, state);
   });
   // Headroom-powered session compaction (hybrid architecture).
@@ -2039,16 +2094,6 @@ export default function headroomExtension(pi: ExtensionAPI) {
     if (!state.enabled) return;
     await prepareArchiveSession(ctx, state);
     ensureMainCaptured(ctx);
-    // Main session: refresh subagent (+N) from foreign files on every provider
-    // request — the timer-based read alone is unreliable.
-    if (isMainSession(ctx)) {
-      try {
-        const t = readForeignTotals();
-        state.foreignProvider = t.provider;
-        state.foreignTool = t.tool;
-        state.foreignCcr = t.ccr;
-      } catch {}
-    }
     const payload = event.payload;
     if (!isRecord(payload) || (!Array.isArray(payload.messages) && !Array.isArray(payload.input)))
       return;
@@ -2305,7 +2350,7 @@ export default function headroomExtension(pi: ExtensionAPI) {
       },
     });
   } // close if (z)
-  const UPDATE_AUTO_CLEAR_MS = 45_000;
+  const UPDATE_AUTO_CLEAR_MS = 45 * 60_000; // matches the update-lock stale horizon; installs run up to 30 min
   const headroomCommand = {
     description:
       "Manage Headroom: stats, on, off, compact, clear, test, service, version, config, set, debug, start, stop, restart, update",
@@ -2498,15 +2543,16 @@ export default function headroomExtension(pi: ExtensionAPI) {
         state.lastError = "";
         state.installState = "updating";
         renderWidget(ctx, state);
-        // Auto-clear "updating" after 45s even if the process hangs
-        // (matches the lock stale timeout / observed install duration).
+        // Safety net only: the install/update itself is bounded by per-command
+        // timeouts, so the indicator would clear itself; this guards a hung
+        // process, and must outlast a legitimate 30-minute install.
         const clearTimer = setTimeout(() => {
           if (state.installState) {
             state.installState = "";
             renderWidget(ctx, state);
           }
         }, UPDATE_AUTO_CLEAR_MS);
-        await maintainInstall(ctx, state, true);
+        const outcome = await maintainInstall(ctx, state, true);
         // Unconditionally clear "updating": maintainInstall early-returns on
         // up-to-date (no version change) or lock-held without touching
         // installState, so relying on it leaves the indicator stuck forever.
@@ -2514,6 +2560,12 @@ export default function headroomExtension(pi: ExtensionAPI) {
         clearTimeout(clearTimer);
         if (state.lastError) {
           ctx.ui.notify(`Headroom update failed: ${state.lastError}`, "error");
+        } else if (!outcome?.checked) {
+          // A failed PyPI fetch must never be reported as "up to date".
+          ctx.ui.notify(
+            `Headroom ${state.version || "?"} installed; could not check PyPI for updates (offline?).`,
+            "warn",
+          );
         } else {
           const upToDate = state.version && !isNewer(state.latest, state.version);
           ctx.ui.notify(
